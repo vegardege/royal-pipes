@@ -13,9 +13,9 @@ OFFICIAL_URL = "https://www.kongehuset.dk/monarkiet-i-danmark/nytaarstaler/"
 SKIP_PARAGRAPH_PREFIXES = [
     "* * *",
     "Læs Dronningens",
-    "LæsH.M. Dronningens",
-    "Læs omnytårstalens historie.",
-    "Læspressemeddelelseudsendt",
+    "Læs H.M. Dronningens",
+    "Læs om nytårstalens",
+    "Læs pressemeddelelse",
     "Se H.M. Dronningens",
     "Hent H.M. Dronningens",
     "Yderligere oplysninger",
@@ -105,7 +105,7 @@ async def load_official_speech(url: str) -> str:
     soup = await download(url)
 
     for p in soup.select("main .rich-text p"):
-        text = p.get_text(strip=True)
+        text = p.get_text(separator=" ", strip=True)
 
         if not text:
             continue

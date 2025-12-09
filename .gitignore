@@ -204,3 +204,6 @@ __marimo__/
 
 # MacOS residue
 .DS_Store
+
+# Royal Pipes data: Don't commit copyrighted data
+data/
