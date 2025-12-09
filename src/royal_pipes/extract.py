@@ -120,11 +120,3 @@ async def load_official_speech(url: str) -> str:
 
     logger.info(f"Found {len(paragraphs)} paragraphs")
     return "\n\n".join(paragraphs)
-
-
-if __name__ == "__main__":
-    import asyncio
-    import sys
-
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(load_official_speech(sys.argv[1]))

@@ -1,8 +1,10 @@
 import dagster as dg
 
-from royal_pipes.load import load_official_speech, load_official_speeches
+from royal_pipes.defs.resources import AnalyticsDB
+from royal_pipes.extract import load_official_speech, load_official_speeches
+from royal_pipes.transform import compute_word_counts
 
-official_year_partitions = dg.DynamicPartitionsDefinition(name="official_years")
+year_partitions = dg.DynamicPartitionsDefinition(name="years")
 
 
 @dg.asset
@@ -16,20 +18,20 @@ async def official_speeches(context: dg.AssetExecutionContext) -> dict[int, str]
 
     context.log.info(f"Found {len(speeches)} speeches")
 
-    current_partitions = set(context.instance.get_dynamic_partitions("official_years"))
+    current_partitions = set(context.instance.get_dynamic_partitions("years"))
     new_partitions = [
         str(year) for year in speeches if str(year) not in current_partitions
     ]
 
     if new_partitions:
-        context.instance.add_dynamic_partitions("official_years", new_partitions)
+        context.instance.add_dynamic_partitions("years", new_partitions)
         context.log.info(f"Found {len(new_partitions)} new years")
 
     return speeches
 
 
 @dg.asset(
-    partitions_def=official_year_partitions,
+    partitions_def=year_partitions,
     io_manager_key="speech_text_io",
 )
 async def official_speech_content(
@@ -49,3 +51,23 @@ async def official_speech_content(
         return content
     else:
         raise ValueError(f"No URL found for {year}")
+
+
+@dg.asset(deps=[dg.AssetDep("official_speech_content")])
+def word_counts(
+    context: dg.AssetExecutionContext,
+    analytics_db: AnalyticsDB,
+) -> None:
+    """Compute word counts across all speeches and store in SQLite.
+
+    Reads all speech files from data/speeches/ and computes word frequencies
+    per year. Results are stored in the analytics database.
+
+    Table: word_counts (year, word, count)
+    """
+    context.log.info("Computing word counts from all speeches")
+    word_counts_data = compute_word_counts("data/speeches")
+    context.log.info(f"Found {len(word_counts_data)} word-year pairs")
+
+    analytics_db.replace_word_counts(word_counts_data)
+    context.log.info(f"Stored word counts to {analytics_db.db_path}")

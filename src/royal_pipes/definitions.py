@@ -3,6 +3,7 @@ from pathlib import Path
 from dagster import Definitions, load_from_defs_folder
 
 from royal_pipes.defs.io_managers import SpeechTextIOManager
+from royal_pipes.defs.resources import AnalyticsDB
 
 
 def _load_definitions() -> Definitions:
@@ -17,6 +18,7 @@ def _load_definitions() -> Definitions:
         resources={
             **(loaded.resources or {}),
             "speech_text_io": SpeechTextIOManager(storage_dir="data/speeches"),
+            "analytics_db": AnalyticsDB(db_path="data/analytics.db"),
         },
     )
 
