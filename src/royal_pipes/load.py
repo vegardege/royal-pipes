@@ -9,6 +9,24 @@ logger = logging.getLogger(__name__)
 # Official source of yearly speeches
 OFFICIAL_URL = "https://www.kongehuset.dk/monarkiet-i-danmark/nytaarstaler/"
 
+# Starts of non-textual paragraphs
+SKIP_PARAGRAPH_PREFIXES = [
+    "* * *",
+    "Læs Dronningens",
+    "LæsH.M. Dronningens",
+    "Læs omnytårstalens historie.",
+    "Læspressemeddelelseudsendt",
+    "Se H.M. Dronningens",
+    "Hent H.M. Dronningens",
+    "Yderligere oplysninger",
+    "FACEBOOK",
+    "FØLG KONGEHUSET",
+    "Del",
+    "Copyright",
+    "KONGEHUSET",
+    "©",
+]
+
 
 async def download(url: str) -> BeautifulSoup:
     """Download the content of a web page and return a soup object.
@@ -33,6 +51,7 @@ async def load_official_speeches(url: str = OFFICIAL_URL) -> dict[int, str]:
     Raises:
         ValueError: If link text or year parsing fails (indicates site structure changed).
         KeyError: If expected link attributes are missing (indicates site structure changed).
+        aiohttp.ClientError: If the request fails or returns non-200 status.
     """
     logger.info(f"Downloading speeches from {url}")
 
@@ -69,8 +88,43 @@ async def load_official_speeches(url: str = OFFICIAL_URL) -> dict[int, str]:
     return speeches
 
 
+async def load_official_speech(url: str) -> str:
+    """Download the text of a single yearly speech.
+
+    Returns:
+        The stripped text content of the speech.
+
+    Raises:
+        ValueError: If the text could not reliably be extracted from the site.
+        aiohttp.ClientError: If the request fails or returns non-200 status.
+    """
+    logger.info(f"Downloading speech from {url}")
+
+    paragraphs: list[str] = []
+
+    soup = await download(url)
+
+    for p in soup.select("main .rich-text p"):
+        text = p.get_text(strip=True)
+
+        if not text:
+            continue
+
+        if any(
+            text.lower().startswith(prefix.lower())
+            for prefix in SKIP_PARAGRAPH_PREFIXES
+        ):
+            continue
+
+        paragraphs.append(text)
+
+    logger.info(f"Found {len(paragraphs)} paragraphs")
+    return "\n\n".join(paragraphs)
+
+
 if __name__ == "__main__":
     import asyncio
+    import sys
 
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(load_official_speeches(OFFICIAL_URL))
+    asyncio.run(load_official_speech(sys.argv[1]))
