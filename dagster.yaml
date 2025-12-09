@@ -1,0 +1,6 @@
+# Dagster configuration
+# See: https://docs.dagster.io/deployment/dagster-instance
+
+# Enable freshness policies (preview feature)
+freshness:
+  enabled: True

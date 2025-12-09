@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import dagster as dg
 from pydantic import Field
 
@@ -240,13 +242,38 @@ def word_counts_contains_danmark(
     )
 
 
+@dg.asset(
+    deps=[dg.AssetDep("danskespil_odds")],
+    auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=24)),
+)
+def odds(
+    context: dg.AssetExecutionContext,
+    analytics_db: AnalyticsDB,
+    danskespil_odds: dict[str, float],
+) -> None:
+    """Store betting odds in the SQLite database.
+
+    Stores the scraped odds in the 'odds' table with schema:
+    - word TEXT (primary key)
+    - odds REAL
+
+    This table is atomically replaced each time the asset is materialized.
+
+    Freshness: Expected to be updated at least once every 24 hours.
+    """
+    context.log.info(f"Storing {len(danskespil_odds)} betting odds to database")
+    analytics_db.replace_odds(danskespil_odds)
+    context.log.info(f"Stored odds to {analytics_db.db_path}")
+
+
 @dg.asset_check(asset=danskespil_odds)
 def betting_odds_minimum_count(
-    _: dg.AssetCheckExecutionContext, betting_odds: dict[str, float]
+    _: dg.AssetCheckExecutionContext, danskespil_odds: dict[str, float]
 ) -> dg.AssetCheckResult:
     """Check that we scraped a reasonable number of betting options."""
     min_count = 100  # Expect at least 100 words to bet on
-    count = len(betting_odds)
+    count = len(danskespil_odds)
     passed = count >= min_count
 
     return dg.AssetCheckResult(
