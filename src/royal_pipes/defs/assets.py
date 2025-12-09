@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import dagster as dg
 
 from royal_pipes.defs.resources import AnalyticsDB
@@ -53,7 +55,10 @@ async def official_speech_content(
         raise ValueError(f"No URL found for {year}")
 
 
-@dg.asset(deps=[dg.AssetDep("official_speech_content")])
+@dg.asset(
+    deps=[dg.AssetDep("official_speech_content")],
+    auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
+)
 def word_counts(
     context: dg.AssetExecutionContext,
     analytics_db: AnalyticsDB,
@@ -71,3 +76,112 @@ def word_counts(
 
     analytics_db.replace_word_counts(word_counts_data)
     context.log.info(f"Stored word counts to {analytics_db.db_path}")
+
+
+@dg.asset_check(asset=official_speeches)
+def speeches_found_count(
+    _: dg.AssetCheckExecutionContext, official_speeches: dict[int, str]
+) -> dg.AssetCheckResult:
+    """Check that at least 10 speeches were found from the official source."""
+    min_speeches = 10
+    count = len(official_speeches)
+    passed = count >= min_speeches
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=f"Found {count} speeches (minimum: {min_speeches})"
+        if passed
+        else f"Only found {count} speeches, expected at least {min_speeches}",
+        metadata={"count": count, "min_count": min_speeches},
+    )
+
+
+@dg.asset_check(asset=official_speech_content)
+def speeches_minimum_length(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckResult:
+    """Check that all speech files have minimum expected length."""
+    speeches_dir = Path("data/speeches")
+    min_length = 1000
+    failed_speeches = []
+
+    for speech_file in sorted(speeches_dir.glob("*.txt")):
+        content = speech_file.read_text(encoding="utf-8")
+        if len(content) < min_length:
+            failed_speeches.append((speech_file.stem, len(content)))
+
+    passed = len(failed_speeches) == 0
+
+    if passed:
+        total_files = len(list(speeches_dir.glob("*.txt")))
+        description = (
+            f"All {total_files} speeches meet minimum length of {min_length} characters"
+        )
+    else:
+        description = (
+            f"{len(failed_speeches)} speeches below minimum: {failed_speeches}"
+        )
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=description,
+        metadata={"min_length": min_length, "failed_count": len(failed_speeches)},
+    )
+
+
+@dg.asset_check(asset=official_speech_content)
+def speeches_contain_danmark(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckResult:
+    """Check that all speeches mention Danmark."""
+    speeches_dir = Path("data/speeches")
+    missing_danmark = []
+
+    for speech_file in sorted(speeches_dir.glob("*.txt")):
+        content = speech_file.read_text(encoding="utf-8").lower()
+        if "danmark" not in content:
+            missing_danmark.append(speech_file.stem)
+
+    passed = len(missing_danmark) == 0
+
+    if passed:
+        total_files = len(list(speeches_dir.glob("*.txt")))
+        description = f"All {total_files} speeches contain 'danmark'"
+    else:
+        description = f"{len(missing_danmark)} speeches missing 'danmark': {sorted(missing_danmark)}"
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=description,
+        metadata={
+            "missing_count": len(missing_danmark),
+            "missing_years": sorted(missing_danmark),
+        },
+    )
+
+
+@dg.asset_check(asset=word_counts)
+def word_counts_contains_danmark(
+    _: dg.AssetCheckExecutionContext, analytics_db: AnalyticsDB
+) -> dg.AssetCheckResult:
+    """Check that word counts include 'denmark' for all years."""
+    with analytics_db.get_connection() as conn:
+        cursor = conn.execute("SELECT DISTINCT year FROM word_counts ORDER BY year")
+        years = [row[0] for row in cursor.fetchall()]
+
+        cursor = conn.execute(
+            "SELECT DISTINCT year FROM word_counts WHERE word = 'danmark' ORDER BY year"
+        )
+        years_with_danmark = [row[0] for row in cursor.fetchall()]
+
+    missing_years = set(years) - set(years_with_danmark)
+
+    passed = len(missing_years) == 0
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=f"All {len(years)} years contain 'danmark'"
+        if passed
+        else f"{len(missing_years)} years missing 'danmark': {sorted(missing_years)}",
+        metadata={
+            "total_years": len(years),
+            "years_with_danmark": len(years_with_danmark),
+            "missing_years": sorted(missing_years) if missing_years else [],
+        },
+    )

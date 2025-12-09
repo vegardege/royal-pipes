@@ -11,6 +11,10 @@ class AnalyticsDB(dg.ConfigurableResource):
 
     db_path: str = "data/analytics.db"
 
+    def get_connection(self):
+        """Get a connection to the analytics database."""
+        return db.get_connection(self.db_path)
+
     def ensure_word_counts_table(self) -> None:
         """Ensure the word_counts table exists."""
         db.ensure_word_counts_table(self.db_path)

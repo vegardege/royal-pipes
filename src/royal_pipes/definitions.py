@@ -12,6 +12,7 @@ def _load_definitions() -> Definitions:
 
     return Definitions(
         assets=loaded.assets,
+        asset_checks=loaded.asset_checks,
         schedules=loaded.schedules,
         sensors=loaded.sensors,
         jobs=loaded.jobs,
