@@ -7,9 +7,10 @@ class AnalyticsDB(dg.ConfigurableResource):
     """SQLite database resource for analytics data.
 
     Wraps pure Python db module with Dagster resource pattern.
+    Defaults to XDG_DATA_HOME/royal-pipes/analytics.db.
     """
 
-    db_path: str = "data/analytics.db"
+    db_path: str
 
     def get_connection(self):
         """Get a connection to the analytics database."""

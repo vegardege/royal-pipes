@@ -6,11 +6,12 @@ import dagster as dg
 class SpeechTextIOManager(dg.ConfigurableIOManager):
     """I/O Manager that stores speeches as local text files.
 
-    Each partitioned speech is stored as data/speeches/YYYY.txt.
+    Each partitioned speech is stored as {storage_dir}/YYYY.txt.
     Supports both manual files (dropped in by user) and scraped files.
+    Defaults to XDG_DATA_HOME/royal-pipes/speeches.
     """
 
-    storage_dir: str = "data/speeches"
+    storage_dir: str
 
     def _get_path(self, context: dg.OutputContext | dg.InputContext) -> Path:
         """Get file path for a speech partition."""

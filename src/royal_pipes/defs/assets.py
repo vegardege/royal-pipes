@@ -2,6 +2,7 @@ from pathlib import Path
 
 import dagster as dg
 
+from royal_pipes.config import speeches_dir
 from royal_pipes.defs.resources import AnalyticsDB
 from royal_pipes.extract import load_official_speech, load_official_speeches
 from royal_pipes.transform import compute_word_counts
@@ -42,8 +43,8 @@ async def official_speech_content(
 ) -> str:
     """Download and store a single speech.
 
-    Stored as data/speeches/YYYY.txt. You can manually add files here
-    and they will be used instead of re-scraping.
+    Stored as YYYY.txt in the XDG data directory. You can manually add files
+    to the speeches directory and they will be used instead of re-scraping.
     """
     year = int(context.partition_key)
     if url := official_speeches.get(year):
@@ -65,13 +66,13 @@ def word_counts(
 ) -> None:
     """Compute word counts across all speeches and store in SQLite.
 
-    Reads all speech files from data/speeches/ and computes word frequencies
-    per year. Results are stored in the analytics database.
+    Reads all speech files from the XDG speeches directory and computes word
+    frequencies per year. Results are stored in the analytics database.
 
     Table: word_counts (year, word, count)
     """
     context.log.info("Computing word counts from all speeches")
-    word_counts_data = compute_word_counts("data/speeches")
+    word_counts_data = compute_word_counts(speeches_dir())
     context.log.info(f"Found {len(word_counts_data)} word-year pairs")
 
     analytics_db.replace_word_counts(word_counts_data)
@@ -99,11 +100,11 @@ def speeches_found_count(
 @dg.asset_check(asset=official_speech_content)
 def speeches_minimum_length(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckResult:
     """Check that all speech files have minimum expected length."""
-    speeches_dir = Path("data/speeches")
+    speeches_path = speeches_dir()
     min_length = 1000
     failed_speeches = []
 
-    for speech_file in sorted(speeches_dir.glob("*.txt")):
+    for speech_file in sorted(speeches_path.glob("*.txt")):
         content = speech_file.read_text(encoding="utf-8")
         if len(content) < min_length:
             failed_speeches.append((speech_file.stem, len(content)))
@@ -111,7 +112,7 @@ def speeches_minimum_length(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckRe
     passed = len(failed_speeches) == 0
 
     if passed:
-        total_files = len(list(speeches_dir.glob("*.txt")))
+        total_files = len(list(speeches_path.glob("*.txt")))
         description = (
             f"All {total_files} speeches meet minimum length of {min_length} characters"
         )
@@ -130,10 +131,10 @@ def speeches_minimum_length(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckRe
 @dg.asset_check(asset=official_speech_content)
 def speeches_contain_danmark(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckResult:
     """Check that all speeches mention Danmark."""
-    speeches_dir = Path("data/speeches")
+    speeches_path = speeches_dir()
     missing_danmark = []
 
-    for speech_file in sorted(speeches_dir.glob("*.txt")):
+    for speech_file in sorted(speeches_path.glob("*.txt")):
         content = speech_file.read_text(encoding="utf-8").lower()
         if "danmark" not in content:
             missing_danmark.append(speech_file.stem)
@@ -141,7 +142,7 @@ def speeches_contain_danmark(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckR
     passed = len(missing_danmark) == 0
 
     if passed:
-        total_files = len(list(speeches_dir.glob("*.txt")))
+        total_files = len(list(speeches_path.glob("*.txt")))
         description = f"All {total_files} speeches contain 'danmark'"
     else:
         description = f"{len(missing_danmark)} speeches missing 'danmark': {sorted(missing_danmark)}"
