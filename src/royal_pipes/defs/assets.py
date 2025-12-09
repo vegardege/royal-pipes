@@ -11,7 +11,7 @@ from royal_pipes.extract import (
     load_official_speech,
     load_official_speeches,
 )
-from royal_pipes.transform import compute_word_counts
+from royal_pipes.transform import compute_odds_counts, compute_word_counts
 
 year_partitions = dg.DynamicPartitionsDefinition(name="years")
 
@@ -265,6 +265,52 @@ def odds(
     context.log.info(f"Storing {len(danskespil_odds)} betting odds to database")
     analytics_db.replace_odds(danskespil_odds)
     context.log.info(f"Stored odds to {analytics_db.db_path}")
+
+
+@dg.asset(
+    deps=[dg.AssetDep("official_speech_content"), dg.AssetDep("odds")],
+    auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
+)
+def odds_count(
+    context: dg.AssetExecutionContext,
+    analytics_db: AnalyticsDB,
+) -> None:
+    """Count occurrences of betting odds words in historical speeches.
+
+    Reads all speech files from disk and counts how many times each odds
+    word (and its variants) appears in each year's speech.
+
+    For words like "Politi/-et", counts both "politi" and "politiet" together.
+    For multi-word phrases like "Søens Folk", counts exact phrase matches.
+
+    Stores results in the 'odds_count' table with schema:
+    - year INTEGER
+    - word TEXT (the original odds word)
+    - count INTEGER
+
+    This allows comparing betting odds against historical frequency.
+
+    Dependencies:
+    - official_speech_content: Needs the historical speeches
+    - odds: Needs the list of odds words to count
+    """
+    context.log.info("Computing odds counts from speeches")
+
+    # Get list of odds words from database
+    with analytics_db.get_connection() as conn:
+        cursor = conn.execute("SELECT word FROM odds")
+        odds_words = [row[0] for row in cursor.fetchall()]
+
+    context.log.info(f"Counting {len(odds_words)} odds words across all speeches")
+
+    # Compute counts across all speeches
+    odds_counts_data = compute_odds_counts(speeches_dir(), odds_words)
+
+    context.log.info(f"Found {len(odds_counts_data)} word-year pairs")
+
+    # Store in database
+    analytics_db.replace_odds_counts(odds_counts_data)
+    context.log.info(f"Stored odds counts to {analytics_db.db_path}")
 
 
 @dg.asset_check(asset=danskespil_odds)

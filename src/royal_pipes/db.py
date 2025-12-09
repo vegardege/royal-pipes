@@ -17,6 +17,15 @@ ODDS_TABLE = """
     )
 """
 
+ODDS_COUNT_TABLE = """
+    CREATE TABLE IF NOT EXISTS odds_count (
+        year INTEGER NOT NULL,
+        word TEXT NOT NULL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (year, word)
+    )
+"""
+
 
 def get_connection(db_path: str | Path) -> sqlite3.Connection:
     """Get a connection to the database.
@@ -107,5 +116,46 @@ def replace_odds(db_path: str | Path, odds: dict[str, float]) -> None:
         conn.executemany(
             "INSERT INTO odds (word, odds) VALUES (?, ?)",
             odds.items(),
+        )
+        conn.commit()
+
+
+def ensure_odds_count_table(db_path: str | Path) -> None:
+    """Ensure the odds_count table exists with the correct schema.
+
+    Args:
+        db_path: Path to the SQLite database file
+
+    Table schema:
+        year INTEGER - The year of the speech
+        word TEXT - The odds word/phrase being counted
+        count INTEGER - Number of occurrences in that year's speech
+
+    Primary key: (year, word)
+    """
+    with get_connection(db_path) as conn:
+        conn.execute(ODDS_COUNT_TABLE)
+        conn.commit()
+
+
+def replace_odds_counts(
+    db_path: str | Path, odds_counts: list[tuple[int, str, int]]
+) -> None:
+    """Replace all odds counts in the database.
+
+    Args:
+        db_path: Path to the SQLite database file
+        odds_counts: List of (year, word, count) tuples
+
+    This atomically replaces the entire table contents.
+    """
+    ensure_odds_count_table(db_path)
+
+    with get_connection(db_path) as conn:
+        # Atomic replacement: delete all, then insert
+        conn.execute("DELETE FROM odds_count")
+        conn.executemany(
+            "INSERT INTO odds_count (year, word, count) VALUES (?, ?, ?)",
+            odds_counts,
         )
         conn.commit()

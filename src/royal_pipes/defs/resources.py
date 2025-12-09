@@ -31,3 +31,11 @@ class AnalyticsDB(dg.ConfigurableResource):
     def replace_odds(self, odds: dict[str, float]) -> None:
         """Replace all betting odds in the database."""
         db.replace_odds(self.db_path, odds)
+
+    def ensure_odds_count_table(self) -> None:
+        """Ensure the odds_count table exists."""
+        db.ensure_odds_count_table(self.db_path)
+
+    def replace_odds_counts(self, odds_counts: list[tuple[int, str, int]]) -> None:
+        """Replace all odds counts in the database."""
+        db.replace_odds_counts(self.db_path, odds_counts)
