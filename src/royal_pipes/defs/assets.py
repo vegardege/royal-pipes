@@ -1,10 +1,14 @@
-from pathlib import Path
-
 import dagster as dg
+from pydantic import Field
 
 from royal_pipes.config import speeches_dir
 from royal_pipes.defs.resources import AnalyticsDB
-from royal_pipes.extract import load_official_speech, load_official_speeches
+from royal_pipes.extract import (
+    BETTING_URL,
+    load_danskespil_odds,
+    load_official_speech,
+    load_official_speeches,
+)
 from royal_pipes.transform import compute_word_counts
 
 year_partitions = dg.DynamicPartitionsDefinition(name="years")
@@ -77,6 +81,54 @@ def word_counts(
 
     analytics_db.replace_word_counts(word_counts_data)
     context.log.info(f"Stored word counts to {analytics_db.db_path}")
+
+
+class BettingOddsConfig(dg.Config):
+    """Configuration for scraping betting odds.
+
+    These settings allow you to customize which betting market to scrape
+    each year, as the URL and section structure may change.
+    """
+
+    url: str = Field(
+        default=BETTING_URL,
+        description="URL of the betting page for the King's New Year speech",
+    )
+    section_index: int = Field(
+        default=0,
+        description="Which market section to scrape (0=word list, 1=over/under, 2=combinations)",
+    )
+
+
+@dg.asset
+async def danskespil_odds(
+    context: dg.AssetExecutionContext, config: BettingOddsConfig
+) -> dict[str, float]:
+    """Scrape current betting odds for which words will appear in the speech.
+
+    This asset tracks what bookmakers think will be mentioned in the King's
+    New Year speech. The URL and section can be configured per materialization
+    to adapt to different years.
+
+    Returns a dictionary mapping words/phrases to their odds.
+    """
+    context.log.info(
+        f"Scraping odds from {config.url} (section {config.section_index})"
+    )
+
+    odds = await load_danskespil_odds(
+        url=config.url, section_index=config.section_index
+    )
+
+    context.log.info(f"Scraped {len(odds)} betting options")
+
+    # Log some interesting stats
+    if odds:
+        sorted_odds = sorted(odds.items(), key=lambda x: x[1])
+        context.log.info(f"Most likely:  {sorted_odds[0]}")
+        context.log.info(f"Least likely: {sorted_odds[-1]}")
+
+    return odds
 
 
 @dg.asset_check(asset=official_speeches)
@@ -185,4 +237,22 @@ def word_counts_contains_danmark(
             "years_with_danmark": len(years_with_danmark),
             "missing_years": sorted(missing_years) if missing_years else [],
         },
+    )
+
+
+@dg.asset_check(asset=danskespil_odds)
+def betting_odds_minimum_count(
+    _: dg.AssetCheckExecutionContext, betting_odds: dict[str, float]
+) -> dg.AssetCheckResult:
+    """Check that we scraped a reasonable number of betting options."""
+    min_count = 100  # Expect at least 100 words to bet on
+    count = len(betting_odds)
+    passed = count >= min_count
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=f"Found {count} betting options (minimum: {min_count})"
+        if passed
+        else f"Only found {count} betting options, expected at least {min_count}",
+        metadata={"count": count, "min_count": min_count},
     )

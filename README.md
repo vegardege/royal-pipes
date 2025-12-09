@@ -4,6 +4,13 @@ Beheading royalty has fallen out of fashion. The Danes, however, have found diff
 
 This project contains the [Dagster](https://dagster.io) pipelines needed to scrape the historical speeches and analyze their content. The pipelines output a [SQLite](https://sqlite.org/) database described below.
 
+## Features
+
+- **Historical Speech Scraping**: Automatically downloads all historical New Year speeches from the official royal website
+- **Word Frequency Analysis**: Computes word counts across all speeches and stores them in a SQLite database
+- **Betting Odds Tracking**: Scrapes current betting odds from Danske Spil for which words will appear in the upcoming speech
+- **Data Quality Checks**: Automated checks to ensure data integrity and completeness
+
 ## Getting started
 
 ### Installing dependencies
@@ -45,6 +52,22 @@ Install the required dependencies:
 ```bash
 pip install -e ".[dev]"
 ```
+
+### Installing Playwright browsers
+
+This project uses Playwright to scrape betting odds from Danske Spil. After installing dependencies, you need to install the Playwright browser:
+
+```bash
+uv run playwright install chromium
+```
+
+Or if you're using pip:
+
+```bash
+playwright install chromium
+```
+
+This downloads the Chromium browser that Playwright uses for web scraping.
 
 ### Running Dagster
 
