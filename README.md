@@ -1,4 +1,8 @@
-# royal_pipes
+# Royal Pipes
+
+Beheading royalty has fallen out of fashion. The Danes, however, have found different use for their royalty: betting on which words will be used in the yearly Nytårstale (new year's eve speech).
+
+This project contains the [Dagster](https://dagster.io) pipelines needed to scrape the historical speeches and analyze their content. The pipelines output a [SQLite](https://sqlite.org/) database described below.
 
 ## Getting started
 
@@ -59,3 +63,4 @@ To learn more about this template and Dagster in general:
 - [Dagster Documentation](https://docs.dagster.io/)
 - [Dagster University](https://courses.dagster.io/)
 - [Dagster Slack Community](https://dagster.io/slack)
+
