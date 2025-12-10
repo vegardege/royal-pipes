@@ -13,12 +13,24 @@ from royal_pipes.extract import (
     load_official_speech,
     load_official_speeches,
 )
-from royal_pipes.transform import compute_odds_counts, compute_speeches, compute_word_counts
+from royal_pipes.transform import (
+    compute_odds_counts,
+    compute_speeches,
+    compute_word_counts,
+)
 
+# Partition Definitions
 year_partitions = dg.DynamicPartitionsDefinition(name="years")
 
 
-@dg.asset
+# ==============================================================================
+# Speeches Domain: Official speeches from kongehuset.dk
+# ==============================================================================
+
+
+@dg.asset(
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(days=365)),
+)
 async def kongehuset_speeches(context: dg.AssetExecutionContext) -> dict[int, str]:
     """Discover all speeches published to the official source."""
     context.log.info("Downloading recent speeches from the official source")
@@ -39,6 +51,24 @@ async def kongehuset_speeches(context: dg.AssetExecutionContext) -> dict[int, st
         context.log.info(f"Found {len(new_partitions)} new years")
 
     return speeches
+
+
+@dg.asset_check(asset=kongehuset_speeches)
+def speeches_found_count(
+    _: dg.AssetCheckExecutionContext, kongehuset_speeches: dict[int, str]
+) -> dg.AssetCheckResult:
+    """Check that at least 10 speeches were found from the official source."""
+    min_speeches = 10
+    count = len(kongehuset_speeches)
+    passed = count >= min_speeches
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=f"Found {count} speeches (minimum: {min_speeches})"
+        if passed
+        else f"Only found {count} speeches, expected at least {min_speeches}",
+        metadata={"count": count, "min_count": min_speeches},
+    )
 
 
 @dg.asset(
@@ -62,95 +92,6 @@ async def kongehuset_speech(
         return content
     else:
         raise ValueError(f"No URL found for {year}")
-
-
-@dg.asset(
-    deps=[dg.AssetDep("kongehuset_speech")],
-    auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
-)
-def word_count(
-    context: dg.AssetExecutionContext,
-    analytics_db: AnalyticsDB,
-) -> None:
-    """Compute word counts across all speeches and store in SQLite.
-
-    Reads all speech files from the XDG speeches directory and computes word
-    frequencies per year. Results are stored in the analytics database.
-
-    Table: word_count (year, word, count)
-    """
-    context.log.info("Computing word counts from all speeches")
-    word_counts_data = compute_word_counts(speeches_dir())
-    context.log.info(f"Found {len(word_counts_data)} word-year pairs")
-
-    analytics_db.replace_word_count(word_counts_data)
-    context.log.info(f"Stored word counts to {analytics_db.db_path}")
-
-
-class BettingOddsConfig(dg.Config):
-    """Configuration for scraping betting odds.
-
-    These settings allow you to customize which betting market to scrape
-    each year, as the URL and section structure may change.
-    """
-
-    url: str = Field(
-        default=BETTING_URL,
-        description="URL of the betting page for the King's New Year speech",
-    )
-    section_index: int = Field(
-        default=0,
-        description="Which market section to scrape (0=word list, 1=over/under, 2=combinations)",
-    )
-
-
-@dg.asset
-async def danskespil_odds(
-    context: dg.AssetExecutionContext, config: BettingOddsConfig
-) -> dict[str, float]:
-    """Scrape current betting odds for which words will appear in the speech.
-
-    This asset tracks what bookmakers think will be mentioned in the King's
-    New Year speech. The URL and section can be configured per materialization
-    to adapt to different years.
-
-    Returns a dictionary mapping words/phrases to their odds.
-    """
-    context.log.info(
-        f"Scraping odds from {config.url} (section {config.section_index})"
-    )
-
-    odds = await load_danskespil_odds(
-        url=config.url, section_index=config.section_index
-    )
-
-    context.log.info(f"Scraped {len(odds)} betting options")
-
-    # Log some interesting stats
-    if odds:
-        sorted_odds = sorted(odds.items(), key=lambda x: x[1])
-        context.log.info(f"Most likely:  {sorted_odds[0]}")
-        context.log.info(f"Least likely: {sorted_odds[-1]}")
-
-    return odds
-
-
-@dg.asset_check(asset=kongehuset_speeches)
-def speeches_found_count(
-    _: dg.AssetCheckExecutionContext, kongehuset_speeches: dict[int, str]
-) -> dg.AssetCheckResult:
-    """Check that at least 10 speeches were found from the official source."""
-    min_speeches = 10
-    count = len(kongehuset_speeches)
-    passed = count >= min_speeches
-
-    return dg.AssetCheckResult(
-        passed=passed,
-        description=f"Found {count} speeches (minimum: {min_speeches})"
-        if passed
-        else f"Only found {count} speeches, expected at least {min_speeches}",
-        metadata={"count": count, "min_count": min_speeches},
-    )
 
 
 @dg.asset_check(asset=kongehuset_speech)
@@ -213,6 +154,29 @@ def speeches_contain_danmark(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckR
     )
 
 
+@dg.asset(
+    deps=[dg.AssetDep("kongehuset_speech")],
+    auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
+)
+def word_count(
+    context: dg.AssetExecutionContext,
+    analytics_db: AnalyticsDB,
+) -> None:
+    """Compute word counts across all speeches and store in SQLite.
+
+    Reads all speech files from the XDG speeches directory and computes word
+    frequencies per year. Results are stored in the analytics database.
+
+    Table: word_count (year, word, count)
+    """
+    context.log.info("Computing word counts from all speeches")
+    word_counts_data = compute_word_counts(speeches_dir())
+    context.log.info(f"Found {len(word_counts_data)} word-year pairs")
+
+    analytics_db.replace_word_count(word_counts_data)
+    context.log.info(f"Stored word counts to {analytics_db.db_path}")
+
+
 @dg.asset_check(asset=word_count)
 def word_count_contains_danmark(
     _: dg.AssetCheckExecutionContext, analytics_db: AnalyticsDB
@@ -244,6 +208,79 @@ def word_count_contains_danmark(
     )
 
 
+# ==============================================================================
+# Betting Domain: Betting odds from Danske Spil
+# ==============================================================================
+
+
+class BettingOddsConfig(dg.Config):
+    """Configuration for scraping betting odds.
+
+    These settings allow you to customize which betting market to scrape
+    each year, as the URL and section structure may change.
+    """
+
+    url: str = Field(
+        default=BETTING_URL,
+        description="URL of the betting page for the King's New Year speech",
+    )
+    section_index: int = Field(
+        default=0,
+        description="Which market section to scrape (0=word list, 1=over/under, 2=combinations)",
+    )
+
+
+@dg.asset(
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(days=1)),
+)
+async def danskespil_odds(
+    context: dg.AssetExecutionContext, config: BettingOddsConfig
+) -> dict[str, float]:
+    """Scrape current betting odds for which words will appear in the speech.
+
+    This asset tracks what bookmakers think will be mentioned in the King's
+    New Year speech. The URL and section can be configured per materialization
+    to adapt to different years.
+
+    Returns a dictionary mapping words/phrases to their odds.
+    """
+    context.log.info(
+        f"Scraping odds from {config.url} (section {config.section_index})"
+    )
+
+    odds = await load_danskespil_odds(
+        url=config.url, section_index=config.section_index
+    )
+
+    context.log.info(f"Scraped {len(odds)} betting options")
+
+    # Log some interesting stats
+    if odds:
+        sorted_odds = sorted(odds.items(), key=lambda x: x[1])
+        context.log.info(f"Most likely:  {sorted_odds[0]}")
+        context.log.info(f"Least likely: {sorted_odds[-1]}")
+
+    return odds
+
+
+@dg.asset_check(asset=danskespil_odds)
+def betting_odds_minimum_count(
+    _: dg.AssetCheckExecutionContext, danskespil_odds: dict[str, float]
+) -> dg.AssetCheckResult:
+    """Check that we scraped a reasonable number of betting options."""
+    min_count = 100  # Expect at least 100 words to bet on
+    count = len(danskespil_odds)
+    passed = count >= min_count
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=f"Found {count} betting options (minimum: {min_count})"
+        if passed
+        else f"Only found {count} betting options, expected at least {min_count}",
+        metadata={"count": count, "min_count": min_count},
+    )
+
+
 @dg.asset(
     auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
     freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=24)),
@@ -266,6 +303,37 @@ def odds(
     context.log.info(f"Storing {len(danskespil_odds)} betting odds to database")
     analytics_db.replace_odds(danskespil_odds)
     context.log.info(f"Stored odds to {analytics_db.db_path}")
+
+
+@dg.asset_check(asset=odds)
+def odds_stored_correctly(
+    _: dg.AssetCheckExecutionContext, analytics_db: AnalyticsDB
+) -> dg.AssetCheckResult:
+    """Check that odds were stored correctly in the database."""
+    with analytics_db.get_connection() as conn:
+        cursor = conn.execute("SELECT COUNT(*) FROM odds")
+        db_count = cursor.fetchone()[0]
+
+        # Check for invalid odds values
+        cursor = conn.execute("SELECT COUNT(*) FROM odds WHERE odds <= 1.0")
+        invalid_odds = cursor.fetchone()[0]
+
+    passed = invalid_odds == 0
+
+    issues = []
+    if not passed:
+        issues.append(f"{invalid_odds} odds with value ≤ 1.0")
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=f"Stored {db_count} odds correctly"
+        if passed
+        else "; ".join(issues),
+        metadata={
+            "db_count": db_count,
+            "invalid_odds": invalid_odds,
+        },
+    )
 
 
 @dg.asset(
@@ -314,26 +382,63 @@ def odds_count(
     context.log.info(f"Stored odds counts to {analytics_db.db_path}")
 
 
-@dg.asset_check(asset=danskespil_odds)
-def betting_odds_minimum_count(
-    _: dg.AssetCheckExecutionContext, danskespil_odds: dict[str, float]
+@dg.asset_check(asset=odds_count)
+def odds_count_valid(
+    _: dg.AssetCheckExecutionContext,
+    analytics_db: AnalyticsDB,
 ) -> dg.AssetCheckResult:
-    """Check that we scraped a reasonable number of betting options."""
-    min_count = 100  # Expect at least 100 words to bet on
-    count = len(danskespil_odds)
-    passed = count >= min_count
+    """Check that odds counts were stored correctly with valid values."""
+    with analytics_db.get_connection() as conn:
+        # Get total entries
+        cursor = conn.execute("SELECT COUNT(*) FROM odds_count")
+        total_entries = cursor.fetchone()[0]
+
+        # Check for negative counts (shouldn't happen)
+        cursor = conn.execute("SELECT COUNT(*) FROM odds_count WHERE count < 0")
+        negative_counts = cursor.fetchone()[0]
+
+        # Get coverage statistics
+        cursor = conn.execute("SELECT COUNT(DISTINCT word) FROM odds_count")
+        unique_words = cursor.fetchone()[0]
+
+        cursor = conn.execute("SELECT COUNT(DISTINCT year) FROM odds_count")
+        unique_years = cursor.fetchone()[0]
+
+    no_negatives = negative_counts == 0
+    has_data = total_entries > 0
+    passed = no_negatives and has_data
+
+    issues = []
+    if not has_data:
+        issues.append("No odds count data found")
+    if not no_negatives:
+        issues.append(f"{negative_counts} negative counts found")
 
     return dg.AssetCheckResult(
         passed=passed,
-        description=f"Found {count} betting options (minimum: {min_count})"
+        description=f"Stored {total_entries:,} odds counts ({unique_words} words × {unique_years} years)"
         if passed
-        else f"Only found {count} betting options, expected at least {min_count}",
-        metadata={"count": count, "min_count": min_count},
+        else "; ".join(issues),
+        metadata={
+            "total_entries": total_entries,
+            "unique_words": unique_words,
+            "unique_years": unique_years,
+            "negative_counts": negative_counts,
+        },
     )
 
 
-@dg.asset
-async def wikipedia_monarchs(context: dg.AssetExecutionContext) -> list[tuple[str, int, int | None]]:
+# ==============================================================================
+# Monarchs Domain: Danish monarch data from Wikipedia
+# ==============================================================================
+
+
+@dg.asset(
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(days=300)),
+)
+async def wikipedia_monarchs(
+    context: dg.AssetExecutionContext,
+) -> list[tuple[str, int, int | None]]:
     """Download the list of Danish monarchs from Wikipedia.
 
     Returns monarchs from 1913 onwards (when New Year speeches began).
@@ -349,6 +454,47 @@ async def wikipedia_monarchs(context: dg.AssetExecutionContext) -> list[tuple[st
         context.log.info(f"  {name}: {start_year}–{end_year or 'present'}")
 
     return monarchs_data
+
+
+@dg.asset_check(asset=wikipedia_monarchs)
+def monarchs_data_valid(
+    _: dg.AssetCheckExecutionContext,
+    wikipedia_monarchs: list[tuple[str, int, int | None]],
+) -> dg.AssetCheckResult:
+    """Check that monarch data is complete and valid."""
+    min_monarchs = 3  # Expect at least 3 monarchs since 1913
+    count = len(wikipedia_monarchs)
+
+    issues = []
+    current_monarch_count = sum(1 for _, _, end in wikipedia_monarchs if end is None)
+
+    if current_monarch_count != 1:
+        issues.append(
+            f"Expected 1 current monarch (end_year=None), found {current_monarch_count}"
+        )
+
+    for name, start, end in wikipedia_monarchs:
+        if end is not None and end < start:
+            issues.append(f"{name} ends before starting: {start}-{end}")
+
+    passed = count >= min_monarchs and len(issues) == 0
+
+    description = (
+        f"Found {count} valid monarchs"
+        if passed
+        else f"Found {count} monarchs but: {'; '.join(issues)}"
+    )
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=description,
+        metadata={
+            "count": count,
+            "min_count": min_monarchs,
+            "current_monarchs": current_monarch_count,
+            "issues": issues,
+        },
+    )
 
 
 @dg.asset(
@@ -427,7 +573,9 @@ def speech_has_monarchs(
     if passed:
         description = f"All {total_speeches} speeches have monarchs assigned"
     else:
-        description = f"{len(missing_monarchs)} speeches missing monarchs: {missing_monarchs}"
+        description = (
+            f"{len(missing_monarchs)} speeches missing monarchs: {missing_monarchs}"
+        )
 
     return dg.AssetCheckResult(
         passed=passed,
@@ -441,7 +589,14 @@ def speech_has_monarchs(
     )
 
 
-@dg.asset
+# ==============================================================================
+# Corpus Domain: Leipzig Corpora Collection for Danish language baseline
+# ==============================================================================
+
+
+@dg.asset(
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(days=300)),
+)
 async def leipzig_corpus(
     context: dg.AssetExecutionContext,
 ) -> list[tuple[str, int]]:
@@ -465,6 +620,24 @@ async def leipzig_corpus(
         context.log.info(f"Top 5 most frequent words: {corpus[:5]}")
 
     return corpus
+
+
+@dg.asset_check(asset=leipzig_corpus)
+def corpus_minimum_words(
+    _: dg.AssetCheckExecutionContext, leipzig_corpus: list[tuple[str, int]]
+) -> dg.AssetCheckResult:
+    """Check that the Leipzig corpus contains a minimum number of words."""
+    min_words = 100000  # Expect at least 100k words from a 1M corpus
+    count = len(leipzig_corpus)
+    passed = count >= min_words
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=f"Found {count:,} words in corpus (minimum: {min_words:,})"
+        if passed
+        else f"Only found {count:,} words in corpus, expected at least {min_words:,}",
+        metadata={"count": count, "min_count": min_words},
+    )
 
 
 @dg.asset(
@@ -492,8 +665,7 @@ def corpus(
 
     # Add frequency to each entry
     corpus_with_freq = [
-        (word, count, count / total_count)
-        for word, count in leipzig_corpus
+        (word, count, count / total_count) for word, count in leipzig_corpus
     ]
 
     context.log.info(f"Storing {len(corpus_with_freq)} words to database")
@@ -501,19 +673,41 @@ def corpus(
     context.log.info(f"Stored corpus to {analytics_db.db_path}")
 
 
-@dg.asset_check(asset=leipzig_corpus)
-def corpus_minimum_words(
-    _: dg.AssetCheckExecutionContext, leipzig_corpus: list[tuple[str, int]]
+@dg.asset_check(asset=corpus)
+def corpus_stored_correctly(
+    _: dg.AssetCheckExecutionContext, analytics_db: AnalyticsDB
 ) -> dg.AssetCheckResult:
-    """Check that the Leipzig corpus contains a minimum number of words."""
-    min_words = 100000  # Expect at least 100k words from a 1M corpus
-    count = len(leipzig_corpus)
-    passed = count >= min_words
+    """Check that corpus data was stored correctly in the database."""
+    with analytics_db.get_connection() as conn:
+        cursor = conn.execute("SELECT COUNT(*) FROM corpus")
+        db_count = cursor.fetchone()[0]
+
+        # Check that frequencies sum to approximately 1.0
+        cursor = conn.execute("SELECT SUM(frequency) FROM corpus")
+        freq_sum = cursor.fetchone()[0] or 0
+
+        # Check for invalid values
+        cursor = conn.execute("SELECT COUNT(*) FROM corpus WHERE count <= 0")
+        invalid_counts = cursor.fetchone()[0]
+
+    freq_valid = 0.99 <= freq_sum <= 1.01  # Allow small floating point errors
+    no_invalid = invalid_counts == 0
+    passed = freq_valid and no_invalid
+
+    issues = []
+    if not freq_valid:
+        issues.append(f"Frequencies sum to {freq_sum:.4f} (expected ~1.0)")
+    if not no_invalid:
+        issues.append(f"{invalid_counts} words with count ≤ 0")
 
     return dg.AssetCheckResult(
         passed=passed,
-        description=f"Found {count:,} words in corpus (minimum: {min_words:,})"
+        description=f"Stored {db_count:,} words correctly (freq sum: {freq_sum:.4f})"
         if passed
-        else f"Only found {count:,} words in corpus, expected at least {min_words:,}",
-        metadata={"count": count, "min_count": min_words},
+        else "; ".join(issues),
+        metadata={
+            "db_count": db_count,
+            "frequency_sum": round(freq_sum, 4),
+            "invalid_counts": invalid_counts,
+        },
     )

@@ -52,6 +52,6 @@ class AnalyticsDB(dg.ConfigurableResource):
         """Ensure the corpus table exists."""
         db.ensure_corpus_table(self.db_path)
 
-    def replace_corpus(self, corpus: list[tuple[str, int]]) -> None:
+    def replace_corpus(self, corpus: list[tuple[str, int, float]]) -> None:
         """Replace all corpus data in the database."""
         db.replace_corpus(self.db_path, corpus)
