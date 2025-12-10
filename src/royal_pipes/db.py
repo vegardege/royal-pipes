@@ -34,6 +34,13 @@ SPEECHES_TABLE = """
     )
 """
 
+CORPUS_TABLE = """
+    CREATE TABLE IF NOT EXISTS corpus (
+        word TEXT PRIMARY KEY NOT NULL,
+        count INTEGER NOT NULL
+    )
+"""
+
 
 def get_connection(db_path: str | Path) -> sqlite3.Connection:
     """Get a connection to the database.
@@ -206,5 +213,43 @@ def replace_speeches(
         conn.executemany(
             "INSERT INTO speeches (year, word_count, monarch) VALUES (?, ?, ?)",
             speeches,
+        )
+        conn.commit()
+
+
+def ensure_corpus_table(db_path: str | Path) -> None:
+    """Ensure the corpus table exists with the correct schema.
+
+    Args:
+        db_path: Path to the SQLite database file
+
+    Table schema:
+        word TEXT - The word from the corpus
+        count INTEGER - Frequency count of the word in the corpus
+
+    Primary key: word
+    """
+    with get_connection(db_path) as conn:
+        conn.execute(CORPUS_TABLE)
+        conn.commit()
+
+
+def replace_corpus(db_path: str | Path, corpus: list[tuple[str, int]]) -> None:
+    """Replace all corpus data in the database.
+
+    Args:
+        db_path: Path to the SQLite database file
+        corpus: List of (word, count) tuples from the Leipzig corpus
+
+    This atomically replaces the entire table contents.
+    """
+    ensure_corpus_table(db_path)
+
+    with get_connection(db_path) as conn:
+        # Atomic replacement: delete all, then insert
+        conn.execute("DELETE FROM corpus")
+        conn.executemany(
+            "INSERT INTO corpus (word, count) VALUES (?, ?)",
+            corpus,
         )
         conn.commit()

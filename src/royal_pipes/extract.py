@@ -1,5 +1,7 @@
+import io
 import logging
 import re
+import tarfile
 from urllib.parse import urljoin
 
 import aiohttp
@@ -16,6 +18,9 @@ BETTING_URL = "https://danskespil.dk/oddset/sports/competition/25652/underholdni
 
 # Wikipedia monarchs list
 MONARCHS_URL = "https://en.wikipedia.org/wiki/List_of_monarchs_of_Denmark"
+
+# Leipzig Corpora Collection - Danish Mixed 1M dataset
+LEIPZIG_URL = "https://downloads.wortschatz-leipzig.de/corpora/dan_mixed_2014_1M.tar.gz"
 
 # Starts of non-textual paragraphs
 SKIP_PARAGRAPH_PREFIXES = [
@@ -317,3 +322,95 @@ async def load_monarchs(url: str = MONARCHS_URL) -> list[tuple[str, int, int | N
 
     logger.info(f"Found {len(monarchs)} monarchs from 1913 onwards")
     return monarchs
+
+
+async def load_leipzig_corpus(url: str = LEIPZIG_URL) -> list[tuple[str, int]]:
+    """Download and parse the Leipzig Corpora Collection Danish dataset.
+
+    Downloads the tar.gz file, extracts the words file, and parses the word frequencies.
+
+    Args:
+        url: URL of the Leipzig Corpora tar.gz file
+
+    Returns:
+        List of (word, count) tuples from the corpus
+
+    Raises:
+        ValueError: If the words file cannot be found or parsed
+        aiohttp.ClientError: If the download fails
+    """
+    logger.info(f"Downloading Leipzig corpus from {url}")
+
+    headers = {"User-Agent": "RoyalPipesBot/1.0"}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            response.raise_for_status()
+            content = await response.read()
+
+    logger.info(f"Downloaded {len(content)} bytes")
+
+    # Extract the tar.gz file
+    try:
+        with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
+            # Find the words file (e.g., dan_mixed_2014_1M-words.txt)
+            words_file = None
+            for member in tar.getmembers():
+                if member.name.endswith("-words.txt"):
+                    words_file = member
+                    break
+
+            if not words_file:
+                raise ValueError(
+                    "Could not find words.txt file in archive - structure may have changed"
+                )
+
+            logger.info(f"Found words file: {words_file.name}")
+
+            # Extract and parse the words file
+            words_data = tar.extractfile(words_file)
+            if not words_data:
+                raise ValueError(f"Could not extract {words_file.name}")
+
+            # Parse tab-separated format: id | word | count
+            # Use a dict to aggregate words by lowercase form (matches word_counts logic)
+            word_counts: dict[str, int] = {}
+            for line_num, line_bytes in enumerate(words_data, start=1):
+                line = line_bytes.decode("utf-8").strip()
+                if not line:
+                    continue
+
+                parts = line.split("\t")
+                if len(parts) != 3:
+                    logger.warning(
+                        f"Line {line_num} has {len(parts)} columns (expected 3): {line[:100]}"
+                    )
+                    continue
+
+                try:
+                    # Format: auto_inc_id | word | count
+                    word = parts[1].strip().lower()  # Lowercase to match word_counts
+
+                    # Skip empty words
+                    if not word:
+                        continue
+
+                    count = int(parts[2].strip())
+                    # Aggregate duplicate words (different capitalizations) by summing
+                    word_counts[word] = word_counts.get(word, 0) + count
+                except (IndexError, ValueError) as e:
+                    logger.warning(
+                        f"Could not parse line {line_num}: {line[:100]} - {e}"
+                    )
+
+    except tarfile.TarError as e:
+        raise ValueError(f"Could not extract tar.gz file: {e}") from e
+
+    if not word_counts:
+        raise ValueError("No word data found in corpus file")
+
+    # Convert dict to list of tuples, sorted by frequency (descending)
+    corpus = sorted(word_counts.items(), key=lambda x: x[1], reverse=True)
+
+    logger.info(f"Parsed {len(corpus)} unique words from Leipzig corpus")
+    return corpus

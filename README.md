@@ -9,6 +9,7 @@ This project contains the [Dagster](https://dagster.io) pipelines needed to scra
 - **Historical Speech Scraping**: Automatically downloads all historical New Year speeches from the official royal website
 - **Word Frequency Analysis**: Computes word counts across all speeches and stores them in a SQLite database
 - **Betting Odds Tracking**: Scrapes current betting odds from Danske Spil for which words will appear in the upcoming speech
+- **Danish Language Corpus**: Downloads general Danish word frequencies from Leipzig Corpora Collection for comparison
 - **Data Quality Checks**: Automated checks to ensure data integrity and completeness
 
 ## Getting started
@@ -78,6 +79,18 @@ dg dev
 ```
 
 Open http://localhost:3000 in your browser to see the project.
+
+## Data Sources
+
+This project uses the following data sources:
+
+- **Royal Speeches**: Official New Year speeches from [Kongehuset.dk](https://www.kongehuset.dk/)
+- **Betting Odds**: Current betting markets from [Danske Spil](https://danskespil.dk/)
+- **Danish Language Corpus**: Word frequency data from the [Leipzig Corpora Collection](https://wortschatz.uni-leipzig.de/en/download/)
+  - Dataset: Danish Mixed 1M (2014)
+  - Source: Wortschatz Leipzig, University of Leipzig
+  - License: Creative Commons Attribution-NonCommercial 4.0 International License
+  - Citation: D. Goldhahn, T. Eckart & U. Quasthoff: Building Large Monolingual Dictionaries at the Leipzig Corpora Collection: From 100 to 200 Languages. In: *Proceedings of the 8th International Language Resources and Evaluation (LREC'12)*, 2012
 
 ## Learn more
 

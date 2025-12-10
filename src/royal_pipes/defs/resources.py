@@ -47,3 +47,11 @@ class AnalyticsDB(dg.ConfigurableResource):
     def replace_speeches(self, speeches: list[tuple[int, int, str]]) -> None:
         """Replace all speeches in the database."""
         db.replace_speeches(self.db_path, speeches)
+
+    def ensure_corpus_table(self) -> None:
+        """Ensure the corpus table exists."""
+        db.ensure_corpus_table(self.db_path)
+
+    def replace_corpus(self, corpus: list[tuple[str, int]]) -> None:
+        """Replace all corpus data in the database."""
+        db.replace_corpus(self.db_path, corpus)

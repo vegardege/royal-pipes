@@ -8,6 +8,7 @@ from royal_pipes.defs.resources import AnalyticsDB
 from royal_pipes.extract import (
     BETTING_URL,
     load_danskespil_odds,
+    load_leipzig_corpus,
     load_monarchs,
     load_official_speech,
     load_official_speeches,
@@ -442,4 +443,70 @@ def speeches_have_monarchs(
             "missing_years": missing_monarchs,
             "monarch_distribution": monarch_distribution,
         },
+    )
+
+
+@dg.asset
+async def leipzig_corpus_data(
+    context: dg.AssetExecutionContext,
+) -> list[tuple[str, int]]:
+    """Download Danish word frequency data from Leipzig Corpora Collection.
+
+    Downloads the Mixed 1M dataset containing Danish word frequencies from
+    the Leipzig Wortschatz project. This provides a general Danish language
+    corpus for comparison with the speech word frequencies.
+
+    Returns a list of (word, count) tuples from the corpus.
+    """
+    context.log.info("Downloading Leipzig Corpora Collection dataset")
+    corpus = await load_leipzig_corpus()
+
+    context.log.info(f"Downloaded {len(corpus)} words from Leipzig corpus")
+
+    # Log some sample statistics
+    if corpus:
+        total_count = sum(count for _, count in corpus)
+        context.log.info(f"Total word occurrences: {total_count:,}")
+        context.log.info(f"Top 5 most frequent words: {corpus[:5]}")
+
+    return corpus
+
+
+@dg.asset(
+    deps=[dg.AssetDep("leipzig_corpus_data")],
+    auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
+)
+def corpus(
+    context: dg.AssetExecutionContext,
+    analytics_db: AnalyticsDB,
+    leipzig_corpus_data: list[tuple[str, int]],
+) -> None:
+    """Store Leipzig corpus word frequencies in the SQLite database.
+
+    Stores the Leipzig Corpora Collection data in the 'corpus' table with schema:
+    - word TEXT (primary key)
+    - count INTEGER
+
+    This table is atomically replaced each time the asset is materialized.
+    """
+    context.log.info(f"Storing {len(leipzig_corpus_data)} words to database")
+    analytics_db.replace_corpus(leipzig_corpus_data)
+    context.log.info(f"Stored corpus to {analytics_db.db_path}")
+
+
+@dg.asset_check(asset=leipzig_corpus_data)
+def corpus_minimum_words(
+    _: dg.AssetCheckExecutionContext, leipzig_corpus_data: list[tuple[str, int]]
+) -> dg.AssetCheckResult:
+    """Check that the Leipzig corpus contains a minimum number of words."""
+    min_words = 100000  # Expect at least 100k words from a 1M corpus
+    count = len(leipzig_corpus_data)
+    passed = count >= min_words
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=f"Found {count:,} words in corpus (minimum: {min_words:,})"
+        if passed
+        else f"Only found {count:,} words in corpus, expected at least {min_words:,}",
+        metadata={"count": count, "min_count": min_words},
     )
