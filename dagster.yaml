@@ -4,3 +4,6 @@
 # Enable freshness policies (preview feature)
 freshness:
   enabled: True
+
+# Storage is controlled by the DAGSTER_HOME environment variable.
+# See README.md for setup instructions.

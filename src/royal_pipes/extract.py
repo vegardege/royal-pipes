@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 OFFICIAL_URL = "https://www.kongehuset.dk/monarkiet-i-danmark/nytaarstaler/"
 
 # Danske Spil odds
-BETTING_URL = "https://danskespil.dk/oddset/sports/competition/25652/underholdning/danmark/danmark-kongens-nytarstale/outrights"
+BETTING_URL = "https://danskespil.dk/oddset/sports/competition/25652/underholdning/danmark/danmark-kongens-nytarstale/matches?eventsSort=outrights"
 
 # Wikipedia monarchs list
 MONARCHS_URL = "https://en.wikipedia.org/wiki/List_of_monarchs_of_Denmark"

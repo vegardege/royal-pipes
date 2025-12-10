@@ -1,8 +1,8 @@
 import sqlite3
 from pathlib import Path
 
-WORD_COUNTS_TABLE = """
-    CREATE TABLE IF NOT EXISTS word_counts (
+WORD_COUNT_TABLE = """
+    CREATE TABLE IF NOT EXISTS word_count (
         year INTEGER NOT NULL,
         word TEXT NOT NULL,
         count INTEGER NOT NULL,
@@ -26,8 +26,8 @@ ODDS_COUNT_TABLE = """
     )
 """
 
-SPEECHES_TABLE = """
-    CREATE TABLE IF NOT EXISTS speeches (
+SPEECH_TABLE = """
+    CREATE TABLE IF NOT EXISTS speech (
         year INTEGER PRIMARY KEY NOT NULL,
         word_count INTEGER NOT NULL,
         monarch TEXT NOT NULL
@@ -56,8 +56,8 @@ def get_connection(db_path: str | Path) -> sqlite3.Connection:
     return sqlite3.connect(path)
 
 
-def ensure_word_counts_table(db_path: str | Path) -> None:
-    """Ensure the word_counts table exists with the correct schema.
+def ensure_word_count_table(db_path: str | Path) -> None:
+    """Ensure the word_count table exists with the correct schema.
 
     Args:
         db_path: Path to the SQLite database file
@@ -70,11 +70,11 @@ def ensure_word_counts_table(db_path: str | Path) -> None:
     Primary key: (year, word)
     """
     with get_connection(db_path) as conn:
-        conn.execute(WORD_COUNTS_TABLE)
+        conn.execute(WORD_COUNT_TABLE)
         conn.commit()
 
 
-def replace_word_counts(
+def replace_word_count(
     db_path: str | Path, word_counts: list[tuple[int, str, int]]
 ) -> None:
     """Replace all word counts in the database.
@@ -85,13 +85,13 @@ def replace_word_counts(
 
     This atomically replaces the entire table contents.
     """
-    ensure_word_counts_table(db_path)
+    ensure_word_count_table(db_path)
 
     with get_connection(db_path) as conn:
         # Atomic replacement: delete all, then insert
-        conn.execute("DELETE FROM word_counts")
+        conn.execute("DELETE FROM word_count")
         conn.executemany(
-            "INSERT INTO word_counts (year, word, count) VALUES (?, ?, ?)",
+            "INSERT INTO word_count (year, word, count) VALUES (?, ?, ?)",
             word_counts,
         )
         conn.commit()
@@ -176,8 +176,8 @@ def replace_odds_counts(
         conn.commit()
 
 
-def ensure_speeches_table(db_path: str | Path) -> None:
-    """Ensure the speeches table exists with the correct schema.
+def ensure_speech_table(db_path: str | Path) -> None:
+    """Ensure the speech table exists with the correct schema.
 
     Args:
         db_path: Path to the SQLite database file
@@ -190,11 +190,11 @@ def ensure_speeches_table(db_path: str | Path) -> None:
     Primary key: year
     """
     with get_connection(db_path) as conn:
-        conn.execute(SPEECHES_TABLE)
+        conn.execute(SPEECH_TABLE)
         conn.commit()
 
 
-def replace_speeches(
+def replace_speech(
     db_path: str | Path, speeches: list[tuple[int, int, str]]
 ) -> None:
     """Replace all speeches in the database.
@@ -205,13 +205,13 @@ def replace_speeches(
 
     This atomically replaces the entire table contents.
     """
-    ensure_speeches_table(db_path)
+    ensure_speech_table(db_path)
 
     with get_connection(db_path) as conn:
         # Atomic replacement: delete all, then insert
-        conn.execute("DELETE FROM speeches")
+        conn.execute("DELETE FROM speech")
         conn.executemany(
-            "INSERT INTO speeches (year, word_count, monarch) VALUES (?, ?, ?)",
+            "INSERT INTO speech (year, word_count, monarch) VALUES (?, ?, ?)",
             speeches,
         )
         conn.commit()

@@ -70,6 +70,10 @@ playwright install chromium
 
 This downloads the Chromium browser that Playwright uses for web scraping.
 
+### Setting up persistent storage
+
+To ensure Dagster remembers materializations across restarts, set the `DAGSTER_HOME` environment variable.
+
 ### Running Dagster
 
 Start the Dagster UI web server:
@@ -79,6 +83,28 @@ dg dev
 ```
 
 Open http://localhost:3000 in your browser to see the project.
+
+## Data Storage
+
+All data is stored locally following the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html):
+
+```
+~/.local/share/royal-pipes/
+├── speeches/            # Scraped speech text files (YYYY.txt)
+└── analytics.db         # SQLite database with word counts and analysis
+```
+
+The storage location respects the `XDG_DATA_HOME` environment variable if set.
+
+### Database Schema
+
+The `analytics.db` SQLite database contains the following tables:
+
+- **`speeches`**: Metadata about each speech (year, word count, monarch)
+- **`word_counts`**: Word frequencies per year (year, word, count)
+- **`odds`**: Current betting odds from Danske Spil (word, odds)
+- **`odds_count`**: Historical frequency of betting words (year, word, count)
+- **`corpus`**: General Danish word frequencies from Leipzig Corpora (word, count)
 
 ## Data Sources
 
@@ -99,4 +125,3 @@ To learn more about this template and Dagster in general:
 - [Dagster Documentation](https://docs.dagster.io/)
 - [Dagster University](https://courses.dagster.io/)
 - [Dagster Slack Community](https://dagster.io/slack)
-

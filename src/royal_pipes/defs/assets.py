@@ -19,7 +19,7 @@ year_partitions = dg.DynamicPartitionsDefinition(name="years")
 
 
 @dg.asset
-async def official_speeches(context: dg.AssetExecutionContext) -> dict[int, str]:
+async def kongehuset_speeches(context: dg.AssetExecutionContext) -> dict[int, str]:
     """Discover all speeches published to the official source."""
     context.log.info("Downloading recent speeches from the official source")
     speeches = await load_official_speeches()
@@ -45,9 +45,9 @@ async def official_speeches(context: dg.AssetExecutionContext) -> dict[int, str]
     partitions_def=year_partitions,
     io_manager_key="speech_text_io",
 )
-async def official_speech_content(
+async def kongehuset_speech(
     context: dg.AssetExecutionContext,
-    official_speeches: dict[int, str],
+    kongehuset_speeches: dict[int, str],
 ) -> str:
     """Download and store a single speech.
 
@@ -55,7 +55,7 @@ async def official_speech_content(
     to the speeches directory and they will be used instead of re-scraping.
     """
     year = int(context.partition_key)
-    if url := official_speeches.get(year):
+    if url := kongehuset_speeches.get(year):
         context.log.info(f"Scraping speech for {year} from {url}")
         content = await load_official_speech(url)
         context.log.info(f"Scraped {len(content)} characters for {year}")
@@ -65,10 +65,10 @@ async def official_speech_content(
 
 
 @dg.asset(
-    deps=[dg.AssetDep("official_speech_content")],
+    deps=[dg.AssetDep("kongehuset_speech")],
     auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
 )
-def word_counts(
+def word_count(
     context: dg.AssetExecutionContext,
     analytics_db: AnalyticsDB,
 ) -> None:
@@ -77,13 +77,13 @@ def word_counts(
     Reads all speech files from the XDG speeches directory and computes word
     frequencies per year. Results are stored in the analytics database.
 
-    Table: word_counts (year, word, count)
+    Table: word_count (year, word, count)
     """
     context.log.info("Computing word counts from all speeches")
     word_counts_data = compute_word_counts(speeches_dir())
     context.log.info(f"Found {len(word_counts_data)} word-year pairs")
 
-    analytics_db.replace_word_counts(word_counts_data)
+    analytics_db.replace_word_count(word_counts_data)
     context.log.info(f"Stored word counts to {analytics_db.db_path}")
 
 
@@ -135,13 +135,13 @@ async def danskespil_odds(
     return odds
 
 
-@dg.asset_check(asset=official_speeches)
+@dg.asset_check(asset=kongehuset_speeches)
 def speeches_found_count(
-    _: dg.AssetCheckExecutionContext, official_speeches: dict[int, str]
+    _: dg.AssetCheckExecutionContext, kongehuset_speeches: dict[int, str]
 ) -> dg.AssetCheckResult:
     """Check that at least 10 speeches were found from the official source."""
     min_speeches = 10
-    count = len(official_speeches)
+    count = len(kongehuset_speeches)
     passed = count >= min_speeches
 
     return dg.AssetCheckResult(
@@ -153,7 +153,7 @@ def speeches_found_count(
     )
 
 
-@dg.asset_check(asset=official_speech_content)
+@dg.asset_check(asset=kongehuset_speech)
 def speeches_minimum_length(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckResult:
     """Check that all speech files have minimum expected length."""
     speeches_path = speeches_dir()
@@ -184,7 +184,7 @@ def speeches_minimum_length(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckRe
     )
 
 
-@dg.asset_check(asset=official_speech_content)
+@dg.asset_check(asset=kongehuset_speech)
 def speeches_contain_danmark(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckResult:
     """Check that all speeches mention Danmark."""
     speeches_path = speeches_dir()
@@ -213,17 +213,17 @@ def speeches_contain_danmark(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckR
     )
 
 
-@dg.asset_check(asset=word_counts)
-def word_counts_contains_danmark(
+@dg.asset_check(asset=word_count)
+def word_count_contains_danmark(
     _: dg.AssetCheckExecutionContext, analytics_db: AnalyticsDB
 ) -> dg.AssetCheckResult:
     """Check that word counts include 'denmark' for all years."""
     with analytics_db.get_connection() as conn:
-        cursor = conn.execute("SELECT DISTINCT year FROM word_counts ORDER BY year")
+        cursor = conn.execute("SELECT DISTINCT year FROM word_count ORDER BY year")
         years = [row[0] for row in cursor.fetchall()]
 
         cursor = conn.execute(
-            "SELECT DISTINCT year FROM word_counts WHERE word = 'danmark' ORDER BY year"
+            "SELECT DISTINCT year FROM word_count WHERE word = 'danmark' ORDER BY year"
         )
         years_with_danmark = [row[0] for row in cursor.fetchall()]
 
@@ -245,7 +245,6 @@ def word_counts_contains_danmark(
 
 
 @dg.asset(
-    deps=[dg.AssetDep("danskespil_odds")],
     auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
     freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=24)),
 )
@@ -270,7 +269,7 @@ def odds(
 
 
 @dg.asset(
-    deps=[dg.AssetDep("official_speech_content"), dg.AssetDep("odds")],
+    deps=[dg.AssetDep("kongehuset_speech"), dg.AssetDep("odds")],
     auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
 )
 def odds_count(
@@ -293,7 +292,7 @@ def odds_count(
     This allows comparing betting odds against historical frequency.
 
     Dependencies:
-    - official_speech_content: Needs the historical speeches
+    - kongehuset_speech: Needs the historical speeches
     - odds: Needs the list of odds words to count
     """
     context.log.info("Computing odds counts from speeches")
@@ -334,7 +333,7 @@ def betting_odds_minimum_count(
 
 
 @dg.asset
-async def monarchs(context: dg.AssetExecutionContext) -> list[tuple[str, int, int | None]]:
+async def wikipedia_monarchs(context: dg.AssetExecutionContext) -> list[tuple[str, int, int | None]]:
     """Download the list of Danish monarchs from Wikipedia.
 
     Returns monarchs from 1913 onwards (when New Year speeches began).
@@ -353,32 +352,32 @@ async def monarchs(context: dg.AssetExecutionContext) -> list[tuple[str, int, in
 
 
 @dg.asset(
-    deps=[dg.AssetDep("word_counts"), dg.AssetDep("monarchs")],
+    deps=[dg.AssetDep("word_count")],
     auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
 )
-def speeches(
+def speech(
     context: dg.AssetExecutionContext,
     analytics_db: AnalyticsDB,
-    monarchs: list[tuple[str, int, int | None]],
+    wikipedia_monarchs: list[tuple[str, int, int | None]],
 ) -> None:
     """Compute speech metadata and store in SQLite.
 
-    Combines word counts from the word_counts table with monarch data
-    to create a comprehensive speeches table.
+    Combines word counts from the word_count table with monarch data
+    to create a comprehensive speech table.
 
-    Table: speeches (year, word_count, monarch)
+    Table: speech (year, word_count, monarch)
     """
-    context.log.info("Computing speech metadata from word_counts and monarchs")
+    context.log.info("Computing speech metadata from word_count and monarchs")
 
     # Load word counts per year from the database
     with analytics_db.get_connection() as conn:
         cursor = conn.execute(
-            "SELECT year, SUM(count) as word_count FROM word_counts GROUP BY year ORDER BY year"
+            "SELECT year, SUM(count) as word_count FROM word_count GROUP BY year ORDER BY year"
         )
         year_word_counts = cursor.fetchall()
 
     # Transform: combine word counts with monarch data
-    speeches_data = compute_speeches(year_word_counts, monarchs)
+    speeches_data = compute_speeches(year_word_counts, wikipedia_monarchs)
 
     context.log.info(f"Found {len(speeches_data)} speeches with monarch data")
 
@@ -389,25 +388,25 @@ def speeches(
             context.log.info(f"  {year}: {word_count} words by {monarch}")
 
     # Store results
-    analytics_db.replace_speeches(speeches_data)
+    analytics_db.replace_speech(speeches_data)
     context.log.info(f"Stored speech metadata to {analytics_db.db_path}")
 
 
-@dg.asset_check(asset=speeches)
-def speeches_have_monarchs(
+@dg.asset_check(asset=speech)
+def speech_has_monarchs(
     _: dg.AssetCheckExecutionContext, analytics_db: AnalyticsDB
 ) -> dg.AssetCheckResult:
     """Check that all speeches have a monarch assigned.
 
-    Verifies that every year in word_counts has a corresponding entry
-    in the speeches table with a non-empty monarch name.
+    Verifies that every year in word_count has a corresponding entry
+    in the speech table with a non-empty monarch name.
     """
     with analytics_db.get_connection() as conn:
-        # Find years in word_counts that don't have a matching speeches entry
+        # Find years in word_count that don't have a matching speech entry
         cursor = conn.execute("""
             SELECT DISTINCT wc.year
-            FROM word_counts wc
-            LEFT JOIN speeches s ON wc.year = s.year
+            FROM word_count wc
+            LEFT JOIN speech s ON wc.year = s.year
             WHERE s.year IS NULL OR s.monarch IS NULL OR s.monarch = ''
             ORDER BY wc.year
         """)
@@ -416,7 +415,7 @@ def speeches_have_monarchs(
         # Get distribution of monarchs
         cursor = conn.execute("""
             SELECT monarch, COUNT(*) as count
-            FROM speeches
+            FROM speech
             WHERE monarch IS NOT NULL AND monarch != ''
             GROUP BY monarch
             ORDER BY count DESC
@@ -424,7 +423,7 @@ def speeches_have_monarchs(
         monarch_distribution = {row[0]: row[1] for row in cursor.fetchall()}
 
         # Get total count of years
-        cursor = conn.execute("SELECT COUNT(DISTINCT year) FROM word_counts")
+        cursor = conn.execute("SELECT COUNT(DISTINCT year) FROM word_count")
         total_years = cursor.fetchone()[0]
 
     passed = len(missing_monarchs) == 0
@@ -447,7 +446,7 @@ def speeches_have_monarchs(
 
 
 @dg.asset
-async def leipzig_corpus_data(
+async def leipzig_corpus(
     context: dg.AssetExecutionContext,
 ) -> list[tuple[str, int]]:
     """Download Danish word frequency data from Leipzig Corpora Collection.
@@ -473,13 +472,12 @@ async def leipzig_corpus_data(
 
 
 @dg.asset(
-    deps=[dg.AssetDep("leipzig_corpus_data")],
     auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
 )
 def corpus(
     context: dg.AssetExecutionContext,
     analytics_db: AnalyticsDB,
-    leipzig_corpus_data: list[tuple[str, int]],
+    leipzig_corpus: list[tuple[str, int]],
 ) -> None:
     """Store Leipzig corpus word frequencies in the SQLite database.
 
@@ -489,18 +487,18 @@ def corpus(
 
     This table is atomically replaced each time the asset is materialized.
     """
-    context.log.info(f"Storing {len(leipzig_corpus_data)} words to database")
-    analytics_db.replace_corpus(leipzig_corpus_data)
+    context.log.info(f"Storing {len(leipzig_corpus)} words to database")
+    analytics_db.replace_corpus(leipzig_corpus)
     context.log.info(f"Stored corpus to {analytics_db.db_path}")
 
 
-@dg.asset_check(asset=leipzig_corpus_data)
+@dg.asset_check(asset=leipzig_corpus)
 def corpus_minimum_words(
-    _: dg.AssetCheckExecutionContext, leipzig_corpus_data: list[tuple[str, int]]
+    _: dg.AssetCheckExecutionContext, leipzig_corpus: list[tuple[str, int]]
 ) -> dg.AssetCheckResult:
     """Check that the Leipzig corpus contains a minimum number of words."""
     min_words = 100000  # Expect at least 100k words from a 1M corpus
-    count = len(leipzig_corpus_data)
+    count = len(leipzig_corpus)
     passed = count >= min_words
 
     return dg.AssetCheckResult(
