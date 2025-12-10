@@ -352,7 +352,7 @@ async def wikipedia_monarchs(context: dg.AssetExecutionContext) -> list[tuple[st
 
 
 @dg.asset(
-    deps=[dg.AssetDep("word_count")],
+    deps=[dg.AssetDep("kongehuset_speech")],
     auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
 )
 def speech(
@@ -362,30 +362,28 @@ def speech(
 ) -> None:
     """Compute speech metadata and store in SQLite.
 
-    Combines word counts from the word_count table with monarch data
-    to create a comprehensive speech table.
+    Combines speech years with monarch data to create a speech metadata table.
 
-    Table: speech (year, word_count, monarch)
+    Table: speech (year, monarch)
     """
-    context.log.info("Computing speech metadata from word_count and monarchs")
+    context.log.info("Computing speech metadata from speeches and monarchs")
 
-    # Load word counts per year from the database
-    with analytics_db.get_connection() as conn:
-        cursor = conn.execute(
-            "SELECT year, SUM(count) as word_count FROM word_count GROUP BY year ORDER BY year"
-        )
-        year_word_counts = cursor.fetchall()
+    # Get list of years from speech files
+    speeches_path = speeches_dir()
+    years = sorted([int(f.stem) for f in speeches_path.glob("*.txt")])
 
-    # Transform: combine word counts with monarch data
-    speeches_data = compute_speeches(year_word_counts, wikipedia_monarchs)
+    context.log.info(f"Found {len(years)} speeches")
 
-    context.log.info(f"Found {len(speeches_data)} speeches with monarch data")
+    # Transform: combine years with monarch data
+    speeches_data = compute_speeches(years, wikipedia_monarchs)
+
+    context.log.info(f"Matched {len(speeches_data)} speeches with monarch data")
 
     # Log some samples
     if speeches_data:
         context.log.info("Sample speeches:")
-        for year, word_count, monarch in speeches_data[:3]:
-            context.log.info(f"  {year}: {word_count} words by {monarch}")
+        for year, monarch in speeches_data[:3]:
+            context.log.info(f"  {year}: {monarch}")
 
     # Store results
     analytics_db.replace_speech(speeches_data)
@@ -398,17 +396,15 @@ def speech_has_monarchs(
 ) -> dg.AssetCheckResult:
     """Check that all speeches have a monarch assigned.
 
-    Verifies that every year in word_count has a corresponding entry
-    in the speech table with a non-empty monarch name.
+    Verifies that every entry in the speech table has a non-empty monarch name.
     """
     with analytics_db.get_connection() as conn:
-        # Find years in word_count that don't have a matching speech entry
+        # Find speeches with missing or empty monarch
         cursor = conn.execute("""
-            SELECT DISTINCT wc.year
-            FROM word_count wc
-            LEFT JOIN speech s ON wc.year = s.year
-            WHERE s.year IS NULL OR s.monarch IS NULL OR s.monarch = ''
-            ORDER BY wc.year
+            SELECT year
+            FROM speech
+            WHERE monarch IS NULL OR monarch = ''
+            ORDER BY year
         """)
         missing_monarchs = [row[0] for row in cursor.fetchall()]
 
@@ -422,14 +418,14 @@ def speech_has_monarchs(
         """)
         monarch_distribution = {row[0]: row[1] for row in cursor.fetchall()}
 
-        # Get total count of years
-        cursor = conn.execute("SELECT COUNT(DISTINCT year) FROM word_count")
-        total_years = cursor.fetchone()[0]
+        # Get total count of speeches
+        cursor = conn.execute("SELECT COUNT(*) FROM speech")
+        total_speeches = cursor.fetchone()[0]
 
     passed = len(missing_monarchs) == 0
 
     if passed:
-        description = f"All {total_years} speeches have monarchs assigned"
+        description = f"All {total_speeches} speeches have monarchs assigned"
     else:
         description = f"{len(missing_monarchs)} speeches missing monarchs: {missing_monarchs}"
 
@@ -437,8 +433,8 @@ def speech_has_monarchs(
         passed=passed,
         description=description,
         metadata={
-            "total_years": total_years,
-            "years_with_monarchs": total_years - len(missing_monarchs),
+            "total_speeches": total_speeches,
+            "speeches_with_monarchs": total_speeches - len(missing_monarchs),
             "missing_years": missing_monarchs,
             "monarch_distribution": monarch_distribution,
         },

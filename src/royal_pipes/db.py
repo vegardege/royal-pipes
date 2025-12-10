@@ -1,6 +1,13 @@
 import sqlite3
 from pathlib import Path
 
+SPEECH_TABLE = """
+    CREATE TABLE IF NOT EXISTS speech (
+        year INTEGER PRIMARY KEY NOT NULL,
+        monarch TEXT NOT NULL
+    )
+"""
+
 WORD_COUNT_TABLE = """
     CREATE TABLE IF NOT EXISTS word_count (
         year INTEGER NOT NULL,
@@ -23,14 +30,6 @@ ODDS_COUNT_TABLE = """
         word TEXT NOT NULL,
         count INTEGER NOT NULL,
         PRIMARY KEY (year, word)
-    )
-"""
-
-SPEECH_TABLE = """
-    CREATE TABLE IF NOT EXISTS speech (
-        year INTEGER PRIMARY KEY NOT NULL,
-        word_count INTEGER NOT NULL,
-        monarch TEXT NOT NULL
     )
 """
 
@@ -184,7 +183,6 @@ def ensure_speech_table(db_path: str | Path) -> None:
 
     Table schema:
         year INTEGER - The year of the speech
-        word_count INTEGER - Number of words in the speech
         monarch TEXT - Name of the monarch who delivered the speech
 
     Primary key: year
@@ -194,14 +192,12 @@ def ensure_speech_table(db_path: str | Path) -> None:
         conn.commit()
 
 
-def replace_speech(
-    db_path: str | Path, speeches: list[tuple[int, int, str]]
-) -> None:
+def replace_speech(db_path: str | Path, speeches: list[tuple[int, str]]) -> None:
     """Replace all speeches in the database.
 
     Args:
         db_path: Path to the SQLite database file
-        speeches: List of (year, word_count, monarch) tuples
+        speeches: List of (year, monarch) tuples
 
     This atomically replaces the entire table contents.
     """
@@ -211,7 +207,7 @@ def replace_speech(
         # Atomic replacement: delete all, then insert
         conn.execute("DELETE FROM speech")
         conn.executemany(
-            "INSERT INTO speech (year, word_count, monarch) VALUES (?, ?, ?)",
+            "INSERT INTO speech (year, monarch) VALUES (?, ?)",
             speeches,
         )
         conn.commit()

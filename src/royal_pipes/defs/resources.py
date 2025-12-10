@@ -44,7 +44,7 @@ class AnalyticsDB(dg.ConfigurableResource):
         """Ensure the speech table exists."""
         db.ensure_speech_table(self.db_path)
 
-    def replace_speech(self, speeches: list[tuple[int, int, str]]) -> None:
+    def replace_speech(self, speeches: list[tuple[int, str]]) -> None:
         """Replace all speeches in the database."""
         db.replace_speech(self.db_path, speeches)
 
