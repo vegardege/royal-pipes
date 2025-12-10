@@ -39,3 +39,11 @@ class AnalyticsDB(dg.ConfigurableResource):
     def replace_odds_counts(self, odds_counts: list[tuple[int, str, int]]) -> None:
         """Replace all odds counts in the database."""
         db.replace_odds_counts(self.db_path, odds_counts)
+
+    def ensure_speeches_table(self) -> None:
+        """Ensure the speeches table exists."""
+        db.ensure_speeches_table(self.db_path)
+
+    def replace_speeches(self, speeches: list[tuple[int, int, str]]) -> None:
+        """Replace all speeches in the database."""
+        db.replace_speeches(self.db_path, speeches)

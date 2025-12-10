@@ -26,6 +26,14 @@ ODDS_COUNT_TABLE = """
     )
 """
 
+SPEECHES_TABLE = """
+    CREATE TABLE IF NOT EXISTS speeches (
+        year INTEGER PRIMARY KEY NOT NULL,
+        word_count INTEGER NOT NULL,
+        monarch TEXT NOT NULL
+    )
+"""
+
 
 def get_connection(db_path: str | Path) -> sqlite3.Connection:
     """Get a connection to the database.
@@ -157,5 +165,46 @@ def replace_odds_counts(
         conn.executemany(
             "INSERT INTO odds_count (year, word, count) VALUES (?, ?, ?)",
             odds_counts,
+        )
+        conn.commit()
+
+
+def ensure_speeches_table(db_path: str | Path) -> None:
+    """Ensure the speeches table exists with the correct schema.
+
+    Args:
+        db_path: Path to the SQLite database file
+
+    Table schema:
+        year INTEGER - The year of the speech
+        word_count INTEGER - Number of words in the speech
+        monarch TEXT - Name of the monarch who delivered the speech
+
+    Primary key: year
+    """
+    with get_connection(db_path) as conn:
+        conn.execute(SPEECHES_TABLE)
+        conn.commit()
+
+
+def replace_speeches(
+    db_path: str | Path, speeches: list[tuple[int, int, str]]
+) -> None:
+    """Replace all speeches in the database.
+
+    Args:
+        db_path: Path to the SQLite database file
+        speeches: List of (year, word_count, monarch) tuples
+
+    This atomically replaces the entire table contents.
+    """
+    ensure_speeches_table(db_path)
+
+    with get_connection(db_path) as conn:
+        # Atomic replacement: delete all, then insert
+        conn.execute("DELETE FROM speeches")
+        conn.executemany(
+            "INSERT INTO speeches (year, word_count, monarch) VALUES (?, ?, ?)",
+            speeches,
         )
         conn.commit()

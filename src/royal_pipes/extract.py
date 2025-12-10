@@ -1,4 +1,5 @@
 import logging
+import re
 from urllib.parse import urljoin
 
 import aiohttp
@@ -12,6 +13,9 @@ OFFICIAL_URL = "https://www.kongehuset.dk/monarkiet-i-danmark/nytaarstaler/"
 
 # Danske Spil odds
 BETTING_URL = "https://danskespil.dk/oddset/sports/competition/25652/underholdning/danmark/danmark-kongens-nytarstale/outrights"
+
+# Wikipedia monarchs list
+MONARCHS_URL = "https://en.wikipedia.org/wiki/List_of_monarchs_of_Denmark"
 
 # Starts of non-textual paragraphs
 SKIP_PARAGRAPH_PREFIXES = [
@@ -38,8 +42,10 @@ async def download(url: str) -> BeautifulSoup:
     Raises:
         aiohttp.ClientError: If the request fails or returns non-200 status.
     """
+    headers = {"User-Agent": "RoyalPipesBot/1.0"}
+
     async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
+        async with session.get(url, headers=headers) as response:
             response.raise_for_status()
             return BeautifulSoup(await response.text(), "html.parser")
 
@@ -244,3 +250,70 @@ async def load_danskespil_odds(
 
     logger.info(f"Extracted {len(betting_odds)} betting options")
     return betting_odds
+
+
+async def load_monarchs(url: str = MONARCHS_URL) -> list[tuple[str, int, int | None]]:
+    """Download and parse the list of Danish monarchs from Wikipedia.
+
+    Returns a list of monarchs from 1913 onwards, with their names and reign periods.
+
+    Returns:
+        List of (name, start_year, end_year) tuples, where end_year is None if still reigning.
+        Example: [("Christian X", 1913, 1947), ("Frederick IX", 1948, 1971), ...]
+
+    Raises:
+        ValueError: If the table structure is unexpected or parsing fails.
+        aiohttp.ClientError: If the request fails or returns non-200 status.
+    """
+    logger.info(f"Downloading monarchs list from {url}")
+
+    soup = await download(url)
+
+    # We only need the Schleswig-Holstein-Sonderburg-Glücksburg branch
+    tables = soup.find_all("table", class_="wikitable")
+    if not tables:
+        raise ValueError("No wikitable found on Wikipedia page")
+
+    table = tables[-1]
+    logger.info("Found monarchs table")
+
+    monarchs: list[tuple[str, int, int | None]] = []
+
+    rows = table.find_all("tr")
+    for row in rows:
+        # First cell contains the info we need
+        first_td = row.find("td")
+        if not first_td:
+            continue
+
+        # Name is in the first <span>
+        name_span = first_td.find("span")
+        if not name_span:
+            continue
+
+        name = name_span.get_text(strip=True)
+
+        # Find year patterns (4-digit years)
+        cell_text = first_td.get_text(separator=" ", strip=True)
+        years = re.findall(r"\b(1\d{3}|20\d{2})\b", cell_text)
+        if len(years) < 1:
+            logger.warning(f"Could not find years for {name}, skipping")
+            continue
+
+        start_year = int(years[0])
+        end_year = int(years[1]) if len(years) >= 2 else None
+
+        # Ignore monarchs who never held a New Year's Eve speech
+        if end_year is not None and end_year < 1913:
+            continue
+
+        logger.info(f"Found monarch: {name} ({start_year}–{end_year or 'present'})")
+        monarchs.append((name, start_year, end_year))
+
+    if not monarchs:
+        raise ValueError(
+            "No monarchs found - Wikipedia table structure may have changed"
+        )
+
+    logger.info(f"Found {len(monarchs)} monarchs from 1913 onwards")
+    return monarchs

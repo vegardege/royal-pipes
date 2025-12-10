@@ -1,5 +1,6 @@
 import re
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 
@@ -121,3 +122,44 @@ def compute_odds_counts(
             odds_counts.append((year, odds_word, total_count))
 
     return odds_counts
+
+
+def compute_speeches(
+    year_word_counts: list[tuple[int, int]],
+    monarchs: list[tuple[str, int, int | None]],
+) -> list[tuple[int, int, str]]:
+    """Combine year word counts with monarch data.
+
+    Args:
+        year_word_counts: List of (year, word_count) tuples
+        monarchs: List of (name, start_year, end_year) tuples where end_year
+                  is None if still reigning
+
+    Returns:
+        List of (year, word_count, monarch_name) tuples for speeches
+
+    Examples:
+        >>> year_word_counts = [(1940, 1523), (1950, 1834)]
+        >>> monarchs = [("Christian X", 1913, 1947), ("Frederick IX", 1948, 1971)]
+        >>> compute_speeches(year_word_counts, monarchs)
+        [(1940, 1523, "Christian X"), (1950, 1834, "Frederick IX")]
+    """
+    # Build a mapping of year -> monarch name for years they reigned on Dec 31
+    year_to_monarch: dict[int, str] = {}
+    current_year = datetime.now().year
+
+    for name, start_year, end_year in monarchs:
+        if end_year is None:
+            end_year = current_year
+
+        for year in range(start_year, end_year + 1):
+            year_to_monarch[year] = name
+
+    # Combine word counts with monarch data
+    speeches: list[tuple[int, int, str]] = []
+    for year, word_count in year_word_counts:
+        monarch = year_to_monarch.get(year)
+        if monarch is not None:
+            speeches.append((year, word_count, monarch))
+
+    return speeches

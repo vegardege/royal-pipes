@@ -8,10 +8,11 @@ from royal_pipes.defs.resources import AnalyticsDB
 from royal_pipes.extract import (
     BETTING_URL,
     load_danskespil_odds,
+    load_monarchs,
     load_official_speech,
     load_official_speeches,
 )
-from royal_pipes.transform import compute_odds_counts, compute_word_counts
+from royal_pipes.transform import compute_odds_counts, compute_speeches, compute_word_counts
 
 year_partitions = dg.DynamicPartitionsDefinition(name="years")
 
@@ -328,4 +329,117 @@ def betting_odds_minimum_count(
         if passed
         else f"Only found {count} betting options, expected at least {min_count}",
         metadata={"count": count, "min_count": min_count},
+    )
+
+
+@dg.asset
+async def monarchs(context: dg.AssetExecutionContext) -> list[tuple[str, int, int | None]]:
+    """Download the list of Danish monarchs from Wikipedia.
+
+    Returns monarchs from 1913 onwards (when New Year speeches began).
+    Each monarch is represented as (name, start_year, end_year) where
+    end_year is None for the current monarch.
+    """
+    context.log.info("Downloading monarchs from Wikipedia")
+    monarchs_data = await load_monarchs()
+
+    context.log.info(f"Found {len(monarchs_data)} monarchs from 1913 onwards")
+
+    for name, start_year, end_year in monarchs_data:
+        context.log.info(f"  {name}: {start_year}–{end_year or 'present'}")
+
+    return monarchs_data
+
+
+@dg.asset(
+    deps=[dg.AssetDep("word_counts"), dg.AssetDep("monarchs")],
+    auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
+)
+def speeches(
+    context: dg.AssetExecutionContext,
+    analytics_db: AnalyticsDB,
+    monarchs: list[tuple[str, int, int | None]],
+) -> None:
+    """Compute speech metadata and store in SQLite.
+
+    Combines word counts from the word_counts table with monarch data
+    to create a comprehensive speeches table.
+
+    Table: speeches (year, word_count, monarch)
+    """
+    context.log.info("Computing speech metadata from word_counts and monarchs")
+
+    # Load word counts per year from the database
+    with analytics_db.get_connection() as conn:
+        cursor = conn.execute(
+            "SELECT year, SUM(count) as word_count FROM word_counts GROUP BY year ORDER BY year"
+        )
+        year_word_counts = cursor.fetchall()
+
+    # Transform: combine word counts with monarch data
+    speeches_data = compute_speeches(year_word_counts, monarchs)
+
+    context.log.info(f"Found {len(speeches_data)} speeches with monarch data")
+
+    # Log some samples
+    if speeches_data:
+        context.log.info("Sample speeches:")
+        for year, word_count, monarch in speeches_data[:3]:
+            context.log.info(f"  {year}: {word_count} words by {monarch}")
+
+    # Store results
+    analytics_db.replace_speeches(speeches_data)
+    context.log.info(f"Stored speech metadata to {analytics_db.db_path}")
+
+
+@dg.asset_check(asset=speeches)
+def speeches_have_monarchs(
+    _: dg.AssetCheckExecutionContext, analytics_db: AnalyticsDB
+) -> dg.AssetCheckResult:
+    """Check that all speeches have a monarch assigned.
+
+    Verifies that every year in word_counts has a corresponding entry
+    in the speeches table with a non-empty monarch name.
+    """
+    with analytics_db.get_connection() as conn:
+        # Find years in word_counts that don't have a matching speeches entry
+        cursor = conn.execute("""
+            SELECT DISTINCT wc.year
+            FROM word_counts wc
+            LEFT JOIN speeches s ON wc.year = s.year
+            WHERE s.year IS NULL OR s.monarch IS NULL OR s.monarch = ''
+            ORDER BY wc.year
+        """)
+        missing_monarchs = [row[0] for row in cursor.fetchall()]
+
+        # Get distribution of monarchs
+        cursor = conn.execute("""
+            SELECT monarch, COUNT(*) as count
+            FROM speeches
+            WHERE monarch IS NOT NULL AND monarch != ''
+            GROUP BY monarch
+            ORDER BY count DESC
+        """)
+        monarch_distribution = {row[0]: row[1] for row in cursor.fetchall()}
+
+        # Get total count of years
+        cursor = conn.execute("SELECT COUNT(DISTINCT year) FROM word_counts")
+        total_years = cursor.fetchone()[0]
+
+    passed = len(missing_monarchs) == 0
+
+    if passed:
+        description = f"All {total_years} speeches have monarchs assigned"
+    else:
+        description = f"{len(missing_monarchs)} speeches missing monarchs: {missing_monarchs}"
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=description,
+        metadata={
+            "total_years": total_years,
+            "years_with_monarchs": total_years - len(missing_monarchs),
+            "missing_years": missing_monarchs,
+            "monarch_distribution": monarch_distribution,
+        },
     )
