@@ -36,7 +36,8 @@ ODDS_COUNT_TABLE = """
 CORPUS_TABLE = """
     CREATE TABLE IF NOT EXISTS corpus (
         word TEXT PRIMARY KEY NOT NULL,
-        count INTEGER NOT NULL
+        count INTEGER NOT NULL,
+        frequency REAL NOT NULL
     )
 """
 
@@ -230,12 +231,12 @@ def ensure_corpus_table(db_path: str | Path) -> None:
         conn.commit()
 
 
-def replace_corpus(db_path: str | Path, corpus: list[tuple[str, int]]) -> None:
+def replace_corpus(db_path: str | Path, corpus: list[tuple[str, int, float]]) -> None:
     """Replace all corpus data in the database.
 
     Args:
         db_path: Path to the SQLite database file
-        corpus: List of (word, count) tuples from the Leipzig corpus
+        corpus: List of (word, count, frequency) tuples from the Leipzig corpus
 
     This atomically replaces the entire table contents.
     """
@@ -245,7 +246,7 @@ def replace_corpus(db_path: str | Path, corpus: list[tuple[str, int]]) -> None:
         # Atomic replacement: delete all, then insert
         conn.execute("DELETE FROM corpus")
         conn.executemany(
-            "INSERT INTO corpus (word, count) VALUES (?, ?)",
+            "INSERT INTO corpus (word, count, frequency) VALUES (?, ?, ?)",
             corpus,
         )
         conn.commit()

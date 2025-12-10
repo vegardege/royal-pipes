@@ -480,11 +480,24 @@ def corpus(
     Stores the Leipzig Corpora Collection data in the 'corpus' table with schema:
     - word TEXT (primary key)
     - count INTEGER
+    - frequency REAL (calculated as count / total_count)
 
     This table is atomically replaced each time the asset is materialized.
     """
-    context.log.info(f"Storing {len(leipzig_corpus)} words to database")
-    analytics_db.replace_corpus(leipzig_corpus)
+    context.log.info(f"Calculating frequencies for {len(leipzig_corpus)} words")
+
+    # Calculate total count for frequency computation
+    total_count = sum(count for _, count in leipzig_corpus)
+    context.log.info(f"Total word occurrences in corpus: {total_count:,}")
+
+    # Add frequency to each entry
+    corpus_with_freq = [
+        (word, count, count / total_count)
+        for word, count in leipzig_corpus
+    ]
+
+    context.log.info(f"Storing {len(corpus_with_freq)} words to database")
+    analytics_db.replace_corpus(corpus_with_freq)
     context.log.info(f"Stored corpus to {analytics_db.db_path}")
 
 
