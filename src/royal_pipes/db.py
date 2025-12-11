@@ -13,6 +13,7 @@ WORD_COUNT_TABLE = """
         year INTEGER NOT NULL,
         word TEXT NOT NULL,
         count INTEGER NOT NULL,
+        is_stopword BOOLEAN NOT NULL,
         PRIMARY KEY (year, word)
     )
 """
@@ -68,7 +69,7 @@ def ensure_word_count_table(db_path: str | Path) -> None:
 
 
 def replace_word_count(
-    db_path: str | Path, word_counts: list[tuple[int, str, int]]
+    db_path: str | Path, word_counts: list[tuple[int, str, int, bool]]
 ) -> None:
     """Replace all word counts in the database.
 
@@ -83,7 +84,7 @@ def replace_word_count(
     with get_connection(db_path) as conn:
         conn.execute("DELETE FROM word_count")
         conn.executemany(
-            "INSERT INTO word_count (year, word, count) VALUES (?, ?, ?)",
+            "INSERT INTO word_count (year, word, count, is_stopword) VALUES (?, ?, ?, ?)",
             word_counts,
         )
         conn.commit()

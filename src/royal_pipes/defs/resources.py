@@ -20,7 +20,7 @@ class AnalyticsDB(dg.ConfigurableResource):
         """Ensure the word_count table exists."""
         db.ensure_word_count_table(self.db_path)
 
-    def replace_word_count(self, word_counts: list[tuple[int, str, int]]) -> None:
+    def replace_word_count(self, word_counts: list[tuple[int, str, int, bool]]) -> None:
         """Replace all word counts in the database."""
         db.replace_word_count(self.db_path, word_counts)
 

@@ -50,17 +50,31 @@ def expand_odds_word(word: str) -> list[str]:
     return [word_lower]
 
 
-def compute_word_counts(speeches_dir: str | Path) -> list[tuple[int, str, int]]:
+def read_stopwords() -> set[str]:
+    """Read all active stopwords from the included txt file.
+
+    Returns:
+        A set of string, each string being a stopword
+    """
+    package_dir = Path(__file__).parent
+    stopwords_path = package_dir / "data" / "stopwords.txt"
+    with open(stopwords_path, "r") as f:
+        return set(line.strip().lower() for line in f if line.strip())
+
+
+def compute_word_counts(speeches_dir: str | Path) -> list[tuple[int, str, int, bool]]:
     """Compute word counts across all speech files.
 
     Args:
         speeches_dir: Directory containing YYYY.txt speech files
 
     Returns:
-        List of (year, word, count) tuples with lowercase cleaned words
+        List of (year, word, count, is_stopword) tuples with lowercase cleaned words
     """
     speeches_path = Path(speeches_dir)
-    word_counts: list[tuple[int, str, int]] = []
+    word_counts: list[tuple[int, str, int, bool]] = []
+
+    stopwords = read_stopwords()
 
     for speech_file in sorted(speeches_path.glob("*.txt")):
         year = int(speech_file.stem)
@@ -72,7 +86,8 @@ def compute_word_counts(speeches_dir: str | Path) -> list[tuple[int, str, int]]:
         word_counter = Counter(words)
 
         for word, count in word_counter.items():
-            word_counts.append((year, word, count))
+            is_stopword = word in stopwords
+            word_counts.append((year, word, count, is_stopword))
 
     return word_counts
 
