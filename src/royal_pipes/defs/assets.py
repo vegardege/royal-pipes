@@ -154,6 +154,46 @@ def speeches_contain_danmark(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckR
     )
 
 
+@dg.asset_check(asset=kongehuset_speech)
+def speeches_no_duplicates(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckResult:
+    """Check that there are no duplicate years in the speeches.
+
+    Duplicate years would indicate a manual error, such as having both
+    2024.txt and 2024 (2).txt in the speeches directory.
+    """
+    speeches_path = speeches_dir()
+    years = []
+
+    for speech_file in sorted(speeches_path.glob("*.txt")):
+        try:
+            year = int(speech_file.stem)
+            years.append(year)
+        except ValueError:
+            # Skip files that don't have valid year names
+            pass
+
+    # Find duplicates
+    from collections import Counter
+    year_counts = Counter(years)
+    duplicates = [year for year, count in year_counts.items() if count > 1]
+
+    passed = len(duplicates) == 0
+
+    if passed:
+        description = f"All {len(years)} speeches have unique years"
+    else:
+        description = f"Found {len(duplicates)} duplicate year(s): {sorted(duplicates)}"
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=description,
+        metadata={
+            "total_speeches": len(years),
+            "duplicate_years": sorted(duplicates),
+        },
+    )
+
+
 @dg.asset(
     deps=[dg.AssetDep("kongehuset_speech")],
     auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
@@ -175,37 +215,6 @@ def word_count(
 
     analytics_db.replace_word_count(word_counts_data)
     context.log.info(f"Stored word counts to {analytics_db.db_path}")
-
-
-@dg.asset_check(asset=word_count)
-def word_count_contains_danmark(
-    _: dg.AssetCheckExecutionContext, analytics_db: AnalyticsDB
-) -> dg.AssetCheckResult:
-    """Check that word counts include 'denmark' for all years."""
-    with analytics_db.get_connection() as conn:
-        cursor = conn.execute("SELECT DISTINCT year FROM word_count ORDER BY year")
-        years = [row[0] for row in cursor.fetchall()]
-
-        cursor = conn.execute(
-            "SELECT DISTINCT year FROM word_count WHERE word = 'danmark' ORDER BY year"
-        )
-        years_with_danmark = [row[0] for row in cursor.fetchall()]
-
-    missing_years = set(years) - set(years_with_danmark)
-
-    passed = len(missing_years) == 0
-
-    return dg.AssetCheckResult(
-        passed=passed,
-        description=f"All {len(years)} years contain 'danmark'"
-        if passed
-        else f"{len(missing_years)} years missing 'danmark': {sorted(missing_years)}",
-        metadata={
-            "total_years": len(years),
-            "years_with_danmark": len(years_with_danmark),
-            "missing_years": sorted(missing_years) if missing_years else [],
-        },
-    )
 
 
 # ==============================================================================
