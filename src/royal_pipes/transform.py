@@ -44,7 +44,6 @@ def expand_odds_word(word: str) -> list[str]:
     if "/" in word_lower and "/-" not in word_lower:
         parts = word_lower.split("/")
         if len(parts) == 2:
-            # Two separate complete words
             return [parts[0].strip(), parts[1].strip()]
 
     # No pattern, return as-is
@@ -140,7 +139,7 @@ def compute_speeches(
 
     Examples:
         >>> years = [1940, 1950]
-        >>> monarchs = [("Christian X", 1913, 1947), ("Frederick IX", 1948, 1971)]
+        >>> monarchs = [("Christian X", 1912, 1947), ("Frederick IX", 1948, 1971)]
         >>> compute_speeches(years, monarchs)
         [(1940, "Christian X"), (1950, "Frederick IX")]
     """

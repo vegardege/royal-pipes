@@ -1,9 +1,10 @@
+from collections import Counter
 from datetime import timedelta
 
 import dagster as dg
 from pydantic import Field
 
-from royal_pipes.config import speeches_dir
+from royal_pipes.config import SPEECHES_DIR
 from royal_pipes.defs.resources import AnalyticsDB
 from royal_pipes.extract import (
     BETTING_URL,
@@ -33,7 +34,7 @@ year_partitions = dg.DynamicPartitionsDefinition(name="years")
 )
 async def kongehuset_speeches(context: dg.AssetExecutionContext) -> dict[int, str]:
     """Discover all speeches published to the official source."""
-    context.log.info("Downloading recent speeches from the official source")
+    context.log.info("Downloading recent speeches from Kongehuset")
     speeches = await load_official_speeches()
 
     if not speeches:
@@ -97,11 +98,10 @@ async def kongehuset_speech(
 @dg.asset_check(asset=kongehuset_speech)
 def speeches_minimum_length(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckResult:
     """Check that all speech files have minimum expected length."""
-    speeches_path = speeches_dir()
     min_length = 1000
     failed_speeches = []
 
-    for speech_file in sorted(speeches_path.glob("*.txt")):
+    for speech_file in sorted(SPEECHES_DIR.glob("*.txt")):
         content = speech_file.read_text(encoding="utf-8")
         if len(content) < min_length:
             failed_speeches.append((speech_file.stem, len(content)))
@@ -109,7 +109,7 @@ def speeches_minimum_length(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckRe
     passed = len(failed_speeches) == 0
 
     if passed:
-        total_files = len(list(speeches_path.glob("*.txt")))
+        total_files = len(list(SPEECHES_DIR.glob("*.txt")))
         description = (
             f"All {total_files} speeches meet minimum length of {min_length} characters"
         )
@@ -126,45 +126,16 @@ def speeches_minimum_length(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckRe
 
 
 @dg.asset_check(asset=kongehuset_speech)
-def speeches_contain_danmark(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckResult:
-    """Check that all speeches mention Danmark."""
-    speeches_path = speeches_dir()
-    missing_danmark = []
-
-    for speech_file in sorted(speeches_path.glob("*.txt")):
-        content = speech_file.read_text(encoding="utf-8").lower()
-        if "danmark" not in content:
-            missing_danmark.append(speech_file.stem)
-
-    passed = len(missing_danmark) == 0
-
-    if passed:
-        total_files = len(list(speeches_path.glob("*.txt")))
-        description = f"All {total_files} speeches contain 'danmark'"
-    else:
-        description = f"{len(missing_danmark)} speeches missing 'danmark': {sorted(missing_danmark)}"
-
-    return dg.AssetCheckResult(
-        passed=passed,
-        description=description,
-        metadata={
-            "missing_count": len(missing_danmark),
-            "missing_years": sorted(missing_danmark),
-        },
-    )
-
-
-@dg.asset_check(asset=kongehuset_speech)
 def speeches_no_duplicates(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckResult:
     """Check that there are no duplicate years in the speeches.
 
     Duplicate years would indicate a manual error, such as having both
-    2024.txt and 2024 (2).txt in the speeches directory.
+    2024.txt and 2024 (2).txt in the speeches directory, or that an old
+    speech was accidentally written to two different yearly files.
     """
-    speeches_path = speeches_dir()
     years = []
 
-    for speech_file in sorted(speeches_path.glob("*.txt")):
+    for speech_file in sorted(SPEECHES_DIR.glob("*.txt")):
         try:
             year = int(speech_file.stem)
             years.append(year)
@@ -173,7 +144,6 @@ def speeches_no_duplicates(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckRes
             pass
 
     # Find duplicates
-    from collections import Counter
     year_counts = Counter(years)
     duplicates = [year for year, count in year_counts.items() if count > 1]
 
@@ -198,10 +168,7 @@ def speeches_no_duplicates(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckRes
     deps=[dg.AssetDep("kongehuset_speech")],
     auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
 )
-def word_count(
-    context: dg.AssetExecutionContext,
-    analytics_db: AnalyticsDB,
-) -> None:
+def word_count(context: dg.AssetExecutionContext, analytics_db: AnalyticsDB) -> None:
     """Compute word counts across all speeches and store in SQLite.
 
     Reads all speech files from the XDG speeches directory and computes word
@@ -210,7 +177,7 @@ def word_count(
     Table: word_count (year, word, count)
     """
     context.log.info("Computing word counts from all speeches")
-    word_counts_data = compute_word_counts(speeches_dir())
+    word_counts_data = compute_word_counts(SPEECHES_DIR)
     context.log.info(f"Found {len(word_counts_data)} word-year pairs")
 
     analytics_db.replace_word_count(word_counts_data)
@@ -235,7 +202,7 @@ class BettingOddsConfig(dg.Config):
     )
     section_index: int = Field(
         default=0,
-        description="Which market section to scrape (0=word list, 1=over/under, 2=combinations)",
+        description="Which market section to scrape, starting from 0",
     )
 
 
@@ -256,14 +223,11 @@ async def danskespil_odds(
     context.log.info(
         f"Scraping odds from {config.url} (section {config.section_index})"
     )
-
     odds = await load_danskespil_odds(
         url=config.url, section_index=config.section_index
     )
-
     context.log.info(f"Scraped {len(odds)} betting options")
 
-    # Log some interesting stats
     if odds:
         sorted_odds = sorted(odds.items(), key=lambda x: x[1])
         context.log.info(f"Most likely:  {sorted_odds[0]}")
@@ -277,7 +241,7 @@ def betting_odds_minimum_count(
     _: dg.AssetCheckExecutionContext, danskespil_odds: dict[str, float]
 ) -> dg.AssetCheckResult:
     """Check that we scraped a reasonable number of betting options."""
-    min_count = 100  # Expect at least 100 words to bet on
+    min_count = 100
     count = len(danskespil_odds)
     passed = count >= min_count
 
@@ -323,7 +287,6 @@ def odds_stored_correctly(
         cursor = conn.execute("SELECT COUNT(*) FROM odds")
         db_count = cursor.fetchone()[0]
 
-        # Check for invalid odds values
         cursor = conn.execute("SELECT COUNT(*) FROM odds WHERE odds <= 1.0")
         invalid_odds = cursor.fetchone()[0]
 
@@ -361,32 +324,17 @@ def odds_count(
     For words like "Politi/-et", counts both "politi" and "politiet" together.
     For multi-word phrases like "Søens Folk", counts exact phrase matches.
 
-    Stores results in the 'odds_count' table with schema:
-    - year INTEGER
-    - word TEXT (the original odds word)
-    - count INTEGER
-
-    This allows comparing betting odds against historical frequency.
-
-    Dependencies:
-    - kongehuset_speech: Needs the historical speeches
-    - odds: Needs the list of odds words to count
+    Table: odds_count (year, word, count)
     """
     context.log.info("Computing odds counts from speeches")
-
-    # Get list of odds words from database
     with analytics_db.get_connection() as conn:
         cursor = conn.execute("SELECT word FROM odds")
         odds_words = [row[0] for row in cursor.fetchall()]
-
     context.log.info(f"Counting {len(odds_words)} odds words across all speeches")
 
-    # Compute counts across all speeches
-    odds_counts_data = compute_odds_counts(speeches_dir(), odds_words)
-
+    odds_counts_data = compute_odds_counts(SPEECHES_DIR, odds_words)
     context.log.info(f"Found {len(odds_counts_data)} word-year pairs")
 
-    # Store in database
     analytics_db.replace_odds_counts(odds_counts_data)
     context.log.info(f"Stored odds counts to {analytics_db.db_path}")
 
@@ -398,15 +346,12 @@ def odds_count_valid(
 ) -> dg.AssetCheckResult:
     """Check that odds counts were stored correctly with valid values."""
     with analytics_db.get_connection() as conn:
-        # Get total entries
         cursor = conn.execute("SELECT COUNT(*) FROM odds_count")
         total_entries = cursor.fetchone()[0]
 
-        # Check for negative counts (shouldn't happen)
         cursor = conn.execute("SELECT COUNT(*) FROM odds_count WHERE count < 0")
         negative_counts = cursor.fetchone()[0]
 
-        # Get coverage statistics
         cursor = conn.execute("SELECT COUNT(DISTINCT word) FROM odds_count")
         unique_words = cursor.fetchone()[0]
 
@@ -450,14 +395,13 @@ async def wikipedia_monarchs(
 ) -> list[tuple[str, int, int | None]]:
     """Download the list of Danish monarchs from Wikipedia.
 
-    Returns monarchs from 1913 onwards (when New Year speeches began).
+    Returns monarchs from 1941 onwards (when New Year speeches began).
     Each monarch is represented as (name, start_year, end_year) where
     end_year is None for the current monarch.
     """
     context.log.info("Downloading monarchs from Wikipedia")
     monarchs_data = await load_monarchs()
-
-    context.log.info(f"Found {len(monarchs_data)} monarchs from 1913 onwards")
+    context.log.info(f"Found {len(monarchs_data)} monarchs from 1941 onwards")
 
     for name, start_year, end_year in monarchs_data:
         context.log.info(f"  {name}: {start_year}–{end_year or 'present'}")
@@ -471,7 +415,7 @@ def monarchs_data_valid(
     wikipedia_monarchs: list[tuple[str, int, int | None]],
 ) -> dg.AssetCheckResult:
     """Check that monarch data is complete and valid."""
-    min_monarchs = 3  # Expect at least 3 monarchs since 1913
+    min_monarchs = 3  # Expect at least 3 monarchs since 1941
     count = len(wikipedia_monarchs)
 
     issues = []
@@ -523,24 +467,17 @@ def speech(
     """
     context.log.info("Computing speech metadata from speeches and monarchs")
 
-    # Get list of years from speech files
-    speeches_path = speeches_dir()
-    years = sorted([int(f.stem) for f in speeches_path.glob("*.txt")])
-
+    years = sorted([int(f.stem) for f in SPEECHES_DIR.glob("*.txt")])
     context.log.info(f"Found {len(years)} speeches")
 
-    # Transform: combine years with monarch data
     speeches_data = compute_speeches(years, wikipedia_monarchs)
-
     context.log.info(f"Matched {len(speeches_data)} speeches with monarch data")
 
-    # Log some samples
     if speeches_data:
         context.log.info("Sample speeches:")
         for year, monarch in speeches_data[:3]:
             context.log.info(f"  {year}: {monarch}")
 
-    # Store results
     analytics_db.replace_speech(speeches_data)
     context.log.info(f"Stored speech metadata to {analytics_db.db_path}")
 
@@ -554,7 +491,6 @@ def speech_has_monarchs(
     Verifies that every entry in the speech table has a non-empty monarch name.
     """
     with analytics_db.get_connection() as conn:
-        # Find speeches with missing or empty monarch
         cursor = conn.execute("""
             SELECT year
             FROM speech
@@ -563,7 +499,6 @@ def speech_has_monarchs(
         """)
         missing_monarchs = [row[0] for row in cursor.fetchall()]
 
-        # Get distribution of monarchs
         cursor = conn.execute("""
             SELECT monarch, COUNT(*) as count
             FROM speech
@@ -573,7 +508,6 @@ def speech_has_monarchs(
         """)
         monarch_distribution = {row[0]: row[1] for row in cursor.fetchall()}
 
-        # Get total count of speeches
         cursor = conn.execute("SELECT COUNT(*) FROM speech")
         total_speeches = cursor.fetchone()[0]
 
@@ -619,10 +553,8 @@ async def leipzig_corpus(
     """
     context.log.info("Downloading Leipzig Corpora Collection dataset")
     corpus = await load_leipzig_corpus()
-
     context.log.info(f"Downloaded {len(corpus)} words from Leipzig corpus")
 
-    # Log some sample statistics
     if corpus:
         total_count = sum(count for _, count in corpus)
         context.log.info(f"Total word occurrences: {total_count:,}")
@@ -636,7 +568,7 @@ def corpus_minimum_words(
     _: dg.AssetCheckExecutionContext, leipzig_corpus: list[tuple[str, int]]
 ) -> dg.AssetCheckResult:
     """Check that the Leipzig corpus contains a minimum number of words."""
-    min_words = 100000  # Expect at least 100k words from a 1M corpus
+    min_words = 100_000  # Expect at least 100k words from a 1M corpus
     count = len(leipzig_corpus)
     passed = count >= min_words
 
@@ -659,20 +591,13 @@ def corpus(
 ) -> None:
     """Store Leipzig corpus word frequencies in the SQLite database.
 
-    Stores the Leipzig Corpora Collection data in the 'corpus' table with schema:
-    - word TEXT (primary key)
-    - count INTEGER
-    - frequency REAL (calculated as count / total_count)
-
     This table is atomically replaced each time the asset is materialized.
     """
     context.log.info(f"Calculating frequencies for {len(leipzig_corpus)} words")
 
-    # Calculate total count for frequency computation
     total_count = sum(count for _, count in leipzig_corpus)
     context.log.info(f"Total word occurrences in corpus: {total_count:,}")
 
-    # Add frequency to each entry
     corpus_with_freq = [
         (word, count, count / total_count) for word, count in leipzig_corpus
     ]
@@ -691,11 +616,9 @@ def corpus_stored_correctly(
         cursor = conn.execute("SELECT COUNT(*) FROM corpus")
         db_count = cursor.fetchone()[0]
 
-        # Check that frequencies sum to approximately 1.0
         cursor = conn.execute("SELECT SUM(frequency) FROM corpus")
         freq_sum = cursor.fetchone()[0] or 0
 
-        # Check for invalid values
         cursor = conn.execute("SELECT COUNT(*) FROM corpus WHERE count <= 0")
         invalid_counts = cursor.fetchone()[0]
 

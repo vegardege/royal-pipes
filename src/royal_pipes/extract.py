@@ -10,7 +10,10 @@ from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
 
-# Official source of yearly speeches
+# Headers for well behaved requests
+HEADERS = {"User-Agent": "RoyalPipesBot/1.0"}
+
+# Official source of yearly speeches from Kongehuset
 OFFICIAL_URL = "https://www.kongehuset.dk/monarkiet-i-danmark/nytaarstaler/"
 
 # Danske Spil odds
@@ -22,7 +25,10 @@ MONARCHS_URL = "https://en.wikipedia.org/wiki/List_of_monarchs_of_Denmark"
 # Leipzig Corpora Collection - Danish Mixed 1M dataset
 LEIPZIG_URL = "https://downloads.wortschatz-leipzig.de/corpora/dan_mixed_2014_1M.tar.gz"
 
-# Starts of non-textual paragraphs
+
+# Starts of non-textual paragraphs. These are observed values that are used
+# in the official transcripts, but which does not represent a part of the
+# actual speech being held.
 SKIP_PARAGRAPH_PREFIXES = [
     "* * *",
     "Læs Dronningens",
@@ -41,16 +47,26 @@ SKIP_PARAGRAPH_PREFIXES = [
 ]
 
 
-async def download(url: str) -> BeautifulSoup:
+async def download_bytes(url: str) -> bytes:
+    """Download the content of a web page and return the raw bytes.
+
+    Raises:
+        aiohttp.ClientError: If the request fails or returns non-200 status.
+    """
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=HEADERS) as response:
+            response.raise_for_status()
+            return await response.read()
+
+
+async def download_soup(url: str) -> BeautifulSoup:
     """Download the content of a web page and return a soup object.
 
     Raises:
         aiohttp.ClientError: If the request fails or returns non-200 status.
     """
-    headers = {"User-Agent": "RoyalPipesBot/1.0"}
-
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
+        async with session.get(url, headers=HEADERS) as response:
             response.raise_for_status()
             return BeautifulSoup(await response.text(), "html.parser")
 
@@ -71,7 +87,7 @@ async def load_official_speeches(url: str = OFFICIAL_URL) -> dict[int, str]:
     logger.info(f"Downloading speeches from {url}")
 
     speeches: dict[int, str] = {}
-    soup = await download(url)
+    soup = await download_soup(url)
 
     for link in soup.select("main a"):
         link_text = link.get_text(strip=True)
@@ -117,7 +133,7 @@ async def load_official_speech(url: str) -> str:
 
     paragraphs: list[str] = []
 
-    soup = await download(url)
+    soup = await download_soup(url)
 
     for p in soup.select("main .rich-text p"):
         text = p.get_text(separator=" ", strip=True)
@@ -164,19 +180,13 @@ async def load_danskespil_odds(
             await page.goto(url, wait_until="networkidle")
 
             # Handle cookie banner - try to reject/close it
-            try:
-                # Try "Afvis" (Reject) button first
-                reject_button = page.locator('button:has-text("Afvis")')
-                if await reject_button.count() > 0:
-                    await reject_button.click(timeout=2000)
-                    logger.info("Rejected cookies")
-                else:
-                    # Fall back to accepting if no reject option
-                    await page.click('button:has-text("Accepter")', timeout=2000)
-                    logger.info("Accepted cookies")
-                await page.wait_for_timeout(500)
-            except Exception:
-                logger.info("No cookie banner found")
+            reject_button = page.locator('button:has-text("Afvis")')
+            if await reject_button.count() > 0:
+                await reject_button.click(timeout=2000)
+                logger.info("Rejected cookies")
+            else:
+                raise ValueError("No button found to reject cookies")
+            await page.wait_for_timeout(500)
 
             # Click all "Vis mere" (Show more) buttons to load all betting options
             max_clicks = 20
@@ -260,11 +270,11 @@ async def load_danskespil_odds(
 async def load_monarchs(url: str = MONARCHS_URL) -> list[tuple[str, int, int | None]]:
     """Download and parse the list of Danish monarchs from Wikipedia.
 
-    Returns a list of monarchs from 1913 onwards, with their names and reign periods.
+    Returns a list of monarchs from 1941 onwards, with their names and reign periods.
 
     Returns:
         List of (name, start_year, end_year) tuples, where end_year is None if still reigning.
-        Example: [("Christian X", 1913, 1947), ("Frederick IX", 1948, 1971), ...]
+        Example: [("Christian X", 1912, 1947), ("Frederick IX", 1948, 1971), ...]
 
     Raises:
         ValueError: If the table structure is unexpected or parsing fails.
@@ -272,7 +282,7 @@ async def load_monarchs(url: str = MONARCHS_URL) -> list[tuple[str, int, int | N
     """
     logger.info(f"Downloading monarchs list from {url}")
 
-    soup = await download(url)
+    soup = await download_soup(url)
 
     # We only need the Schleswig-Holstein-Sonderburg-Glücksburg branch
     tables = soup.find_all("table", class_="wikitable")
@@ -309,7 +319,7 @@ async def load_monarchs(url: str = MONARCHS_URL) -> list[tuple[str, int, int | N
         end_year = int(years[1]) if len(years) >= 2 else None
 
         # Ignore monarchs who never held a New Year's Eve speech
-        if end_year is not None and end_year < 1913:
+        if end_year is not None and end_year < 1941:
             continue
 
         logger.info(f"Found monarch: {name} ({start_year}–{end_year or 'present'})")
@@ -320,7 +330,7 @@ async def load_monarchs(url: str = MONARCHS_URL) -> list[tuple[str, int, int | N
             "No monarchs found - Wikipedia table structure may have changed"
         )
 
-    logger.info(f"Found {len(monarchs)} monarchs from 1913 onwards")
+    logger.info(f"Found {len(monarchs)} monarchs from 1941 onwards")
     return monarchs
 
 
@@ -340,20 +350,14 @@ async def load_leipzig_corpus(url: str = LEIPZIG_URL) -> list[tuple[str, int]]:
         aiohttp.ClientError: If the download fails
     """
     logger.info(f"Downloading Leipzig corpus from {url}")
-
-    headers = {"User-Agent": "RoyalPipesBot/1.0"}
-
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
-            response.raise_for_status()
-            content = await response.read()
-
+    content = await download_bytes(url)
     logger.info(f"Downloaded {len(content)} bytes")
 
-    # Extract the tar.gz file
+    # The corpus is downloaded as a .tar.gz file. We are looking for a specific
+    # file in that archie, named `*-words.txt`. This file is formatted as:
+    #  <lineno>\t<word>\t<count>
     try:
         with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
-            # Find the words file (e.g., dan_mixed_2014_1M-words.txt)
             words_file = None
             for member in tar.getmembers():
                 if member.name.endswith("-words.txt"):
@@ -361,9 +365,7 @@ async def load_leipzig_corpus(url: str = LEIPZIG_URL) -> list[tuple[str, int]]:
                     break
 
             if not words_file:
-                raise ValueError(
-                    "Could not find words.txt file in archive - structure may have changed"
-                )
+                raise ValueError("Could not find words.txt file in archive.")
 
             logger.info(f"Found words file: {words_file.name}")
 
@@ -372,7 +374,7 @@ async def load_leipzig_corpus(url: str = LEIPZIG_URL) -> list[tuple[str, int]]:
             if not words_data:
                 raise ValueError(f"Could not extract {words_file.name}")
 
-            # Parse tab-separated format: id | word | count
+            # Parse tab-separated format: <lineno>\t<word>\t<count>
             # Use a dict to aggregate words by lowercase form (matches word_counts logic)
             word_counts: dict[str, int] = {}
             for line_num, line_bytes in enumerate(words_data, start=1):
@@ -388,15 +390,15 @@ async def load_leipzig_corpus(url: str = LEIPZIG_URL) -> list[tuple[str, int]]:
                     continue
 
                 try:
-                    # Format: auto_inc_id | word | count
-                    word = parts[1].strip().lower()  # Lowercase to match word_counts
+                    # Corpus is mixed case, we only want to evaluate lower case words.
+                    word = parts[1].strip().lower()
 
-                    # Skip empty words
                     if not word:
                         continue
 
+                    # The corpus contains repeats of the same word with different
+                    # capitalization. We aggregate these duplicate words by summing.
                     count = int(parts[2].strip())
-                    # Aggregate duplicate words (different capitalizations) by summing
                     word_counts[word] = word_counts.get(word, 0) + count
                 except (IndexError, ValueError) as e:
                     logger.warning(

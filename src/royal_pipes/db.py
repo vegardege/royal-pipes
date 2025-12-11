@@ -61,13 +61,6 @@ def ensure_word_count_table(db_path: str | Path) -> None:
 
     Args:
         db_path: Path to the SQLite database file
-
-    Table schema:
-        year INTEGER - The year of the speech
-        word TEXT - The word (lowercased, cleaned)
-        count INTEGER - Number of occurrences in that year's speech
-
-    Primary key: (year, word)
     """
     with get_connection(db_path) as conn:
         conn.execute(WORD_COUNT_TABLE)
@@ -88,7 +81,6 @@ def replace_word_count(
     ensure_word_count_table(db_path)
 
     with get_connection(db_path) as conn:
-        # Atomic replacement: delete all, then insert
         conn.execute("DELETE FROM word_count")
         conn.executemany(
             "INSERT INTO word_count (year, word, count) VALUES (?, ?, ?)",
@@ -102,12 +94,6 @@ def ensure_odds_table(db_path: str | Path) -> None:
 
     Args:
         db_path: Path to the SQLite database file
-
-    Table schema:
-        word TEXT - The word/phrase being bet on
-        odds REAL - The betting odds for this word
-
-    Primary key: word
     """
     with get_connection(db_path) as conn:
         conn.execute(ODDS_TABLE)
@@ -126,7 +112,6 @@ def replace_odds(db_path: str | Path, odds: dict[str, float]) -> None:
     ensure_odds_table(db_path)
 
     with get_connection(db_path) as conn:
-        # Atomic replacement: delete all, then insert
         conn.execute("DELETE FROM odds")
         conn.executemany(
             "INSERT INTO odds (word, odds) VALUES (?, ?)",
@@ -140,13 +125,6 @@ def ensure_odds_count_table(db_path: str | Path) -> None:
 
     Args:
         db_path: Path to the SQLite database file
-
-    Table schema:
-        year INTEGER - The year of the speech
-        word TEXT - The odds word/phrase being counted
-        count INTEGER - Number of occurrences in that year's speech
-
-    Primary key: (year, word)
     """
     with get_connection(db_path) as conn:
         conn.execute(ODDS_COUNT_TABLE)
@@ -167,7 +145,6 @@ def replace_odds_counts(
     ensure_odds_count_table(db_path)
 
     with get_connection(db_path) as conn:
-        # Atomic replacement: delete all, then insert
         conn.execute("DELETE FROM odds_count")
         conn.executemany(
             "INSERT INTO odds_count (year, word, count) VALUES (?, ?, ?)",
@@ -181,12 +158,6 @@ def ensure_speech_table(db_path: str | Path) -> None:
 
     Args:
         db_path: Path to the SQLite database file
-
-    Table schema:
-        year INTEGER - The year of the speech
-        monarch TEXT - Name of the monarch who delivered the speech
-
-    Primary key: year
     """
     with get_connection(db_path) as conn:
         conn.execute(SPEECH_TABLE)
@@ -205,7 +176,6 @@ def replace_speech(db_path: str | Path, speeches: list[tuple[int, str]]) -> None
     ensure_speech_table(db_path)
 
     with get_connection(db_path) as conn:
-        # Atomic replacement: delete all, then insert
         conn.execute("DELETE FROM speech")
         conn.executemany(
             "INSERT INTO speech (year, monarch) VALUES (?, ?)",
@@ -219,12 +189,6 @@ def ensure_corpus_table(db_path: str | Path) -> None:
 
     Args:
         db_path: Path to the SQLite database file
-
-    Table schema:
-        word TEXT - The word from the corpus
-        count INTEGER - Frequency count of the word in the corpus
-
-    Primary key: word
     """
     with get_connection(db_path) as conn:
         conn.execute(CORPUS_TABLE)
@@ -243,7 +207,6 @@ def replace_corpus(db_path: str | Path, corpus: list[tuple[str, int, float]]) ->
     ensure_corpus_table(db_path)
 
     with get_connection(db_path) as conn:
-        # Atomic replacement: delete all, then insert
         conn.execute("DELETE FROM corpus")
         conn.executemany(
             "INSERT INTO corpus (word, count, frequency) VALUES (?, ?, ?)",
