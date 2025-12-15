@@ -1,8 +1,12 @@
 # Royal Pipes
 
-Beheading royalty has fallen out of fashion. The Danes, however, have found different use for their royalty: betting on which words will be used in the yearly Nytårstale (new year's eve speech).
+Have you ever wanted a massively over-engineered set of data pipelines to analyse the Danish monarch's New Year's Eve speeches? Well this is your lucky day!
 
-This project contains the [Dagster](https://dagster.io) pipelines needed to scrape the historical speeches and analyze their content. The pipelines output a [SQLite](https://sqlite.org/) database described below.
+This project scrapes the speeches from the official source, as well as odds from Danske Spil, a corpus of the Danish language from Wortschatz Leipzig, and a list of monarch's from Wikipedia. The pipelines are orchestrated with [Dagster](https://dagster.io) and finally output a [SQLite](https://sqlite.org/) database with raw data and pre-analysed numbers.
+
+The data is used by [The King's Speech](https://kingsspeech.pebblepatch.dev/). Both the page and pipelines are under active development and will be improved over the next few weeks.
+
+![Pipeline Architecture](assets/pipelines.png)
 
 ## Features
 
@@ -111,17 +115,9 @@ The `analytics.db` SQLite database contains the following tables:
 This project uses the following data sources:
 
 - **Royal Speeches**: Official New Year speeches from [Kongehuset.dk](https://www.kongehuset.dk/)
-- **Betting Odds**: Current betting markets from [Danske Spil](https://danskespil.dk/)
+- **Betting Odds**: Betting markets from [Danske Spil](https://danskespil.dk/)
 - **Danish Language Corpus**: Word frequency data from the [Leipzig Corpora Collection](https://wortschatz.uni-leipzig.de/en/download/)
   - Dataset: Danish Mixed 1M (2014)
   - Source: Wortschatz Leipzig, University of Leipzig
   - License: Creative Commons Attribution-NonCommercial 4.0 International License
-  - Citation: D. Goldhahn, T. Eckart & U. Quasthoff: Building Large Monolingual Dictionaries at the Leipzig Corpora Collection: From 100 to 200 Languages. In: *Proceedings of the 8th International Language Resources and Evaluation (LREC'12)*, 2012
-
-## Learn more
-
-To learn more about this template and Dagster in general:
-
-- [Dagster Documentation](https://docs.dagster.io/)
-- [Dagster University](https://courses.dagster.io/)
-- [Dagster Slack Community](https://dagster.io/slack)
+  - Citation: Dirk Goldhahn, Thomas Eckart and Uwe Quasthoff (2012): "Building Large Monolingual Dictionaries at the Leipzig Corpora Collection: From 100 to 200 Languages." *Proceedings of LREC'12*.
