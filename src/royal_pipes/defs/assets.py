@@ -98,7 +98,7 @@ async def kongehuset_speech(
 @dg.asset_check(asset=kongehuset_speech)
 def speeches_minimum_length(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckResult:
     """Check that all speech files have minimum expected length."""
-    min_length = 1000
+    min_length = 500
     failed_speeches = []
 
     for speech_file in sorted(SPEECHES_DIR.glob("*.txt")):

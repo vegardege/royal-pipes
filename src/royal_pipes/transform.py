@@ -50,6 +50,42 @@ def expand_odds_word(word: str) -> list[str]:
     return [word_lower]
 
 
+def normalize_text(text: str) -> str:
+    """Normalize text for word counting.
+
+    Applies transformations:
+    1. Remove acute (´) and grave (`) accents: "én" → "en", "è" → "e"
+    2. Preserves Danish letters: å, æ, ø remain unchanged
+    3. Convert to lowercase
+
+    This function can be extended with more normalization rules as needed.
+
+    Args:
+        text: Raw text to normalize
+
+    Returns:
+        Normalized text
+
+    Examples:
+        >>> normalize_text("Én gang i 80'erne på Amalienborg")
+        "en gang i 80'erne på amalienborg"
+    """
+    # Only remove acute and grave accents, preserve Nordic characters
+    # Map specific accented characters to their base forms
+    accent_map = {
+        'á': 'a', 'à': 'a', 'é': 'e', 'è': 'e', 'í': 'i', 'ì': 'i',
+        'ó': 'o', 'ò': 'o', 'ú': 'u', 'ù': 'u', 'ý': 'y', 'ỳ': 'y',
+        'Á': 'a', 'À': 'a', 'É': 'e', 'È': 'e', 'Í': 'i', 'Ì': 'i',
+        'Ó': 'o', 'Ò': 'o', 'Ú': 'u', 'Ù': 'u', 'Ý': 'y', 'Ỳ': 'y',
+    }
+
+    # Replace accented characters
+    for accented, base in accent_map.items():
+        text = text.replace(accented, base)
+
+    return text.lower()
+
+
 def read_stopwords() -> set[str]:
     """Read all active stopwords from the included txt file.
 
@@ -80,9 +116,11 @@ def compute_word_counts(speeches_dir: str | Path) -> list[tuple[int, str, int, b
         year = int(speech_file.stem)
 
         text = speech_file.read_text(encoding="utf-8")
-        text_lower = text.lower()
+        normalized = normalize_text(text)
 
-        words = re.findall(r"\b[\w]+\b", text_lower)
+        # Extract words: allow letters, digits, underscores, and apostrophes
+        # This captures words like "80'erne" as a single token
+        words = re.findall(r"[\w']+", normalized)
         word_counter = Counter(words)
 
         for word, count in word_counter.items():
