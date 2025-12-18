@@ -8,6 +8,8 @@ import aiohttp
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
+from royal_pipes.models import CorpusWord, Monarch
+
 logger = logging.getLogger(__name__)
 
 # Headers for well behaved requests
@@ -267,14 +269,14 @@ async def load_danskespil_odds(
     return betting_odds
 
 
-async def load_monarchs(url: str = MONARCHS_URL) -> list[tuple[str, int, int | None]]:
+async def load_monarchs(url: str = MONARCHS_URL) -> list[Monarch]:
     """Download and parse the list of Danish monarchs from Wikipedia.
 
     Returns a list of monarchs from 1941 onwards, with their names and reign periods.
 
     Returns:
-        List of (name, start_year, end_year) tuples, where end_year is None if still reigning.
-        Example: [("Christian X", 1912, 1947), ("Frederick IX", 1948, 1971), ...]
+        List of Monarch objects, where end_year is None if still reigning.
+        Example: [Monarch("Christian X", 1912, 1947), Monarch("Frederick IX", 1948, 1971), ...]
 
     Raises:
         ValueError: If the table structure is unexpected or parsing fails.
@@ -292,7 +294,7 @@ async def load_monarchs(url: str = MONARCHS_URL) -> list[tuple[str, int, int | N
     table = tables[-1]
     logger.info("Found monarchs table")
 
-    monarchs: list[tuple[str, int, int | None]] = []
+    monarchs: list[Monarch] = []
 
     rows = table.find_all("tr")
     for row in rows:
@@ -323,7 +325,7 @@ async def load_monarchs(url: str = MONARCHS_URL) -> list[tuple[str, int, int | N
             continue
 
         logger.info(f"Found monarch: {name} ({start_year}–{end_year or 'present'})")
-        monarchs.append((name, start_year, end_year))
+        monarchs.append(Monarch(name=name, start_year=start_year, end_year=end_year))
 
     if not monarchs:
         raise ValueError(
@@ -334,7 +336,7 @@ async def load_monarchs(url: str = MONARCHS_URL) -> list[tuple[str, int, int | N
     return monarchs
 
 
-async def load_leipzig_corpus(url: str = LEIPZIG_URL) -> list[tuple[str, int]]:
+async def load_leipzig_corpus(url: str = LEIPZIG_URL) -> list[CorpusWord]:
     """Download and parse the Leipzig Corpora Collection Danish dataset.
 
     Downloads the tar.gz file, extracts the words file, and parses the word frequencies.
@@ -343,7 +345,7 @@ async def load_leipzig_corpus(url: str = LEIPZIG_URL) -> list[tuple[str, int]]:
         url: URL of the Leipzig Corpora tar.gz file
 
     Returns:
-        List of (word, count) tuples from the corpus
+        List of CorpusWord objects from the corpus
 
     Raises:
         ValueError: If the words file cannot be found or parsed
@@ -411,8 +413,11 @@ async def load_leipzig_corpus(url: str = LEIPZIG_URL) -> list[tuple[str, int]]:
     if not word_counts:
         raise ValueError("No word data found in corpus file")
 
-    # Convert dict to list of tuples, sorted by frequency (descending)
-    corpus = sorted(word_counts.items(), key=lambda x: x[1], reverse=True)
+    # Convert dict to list of CorpusWord objects, sorted by frequency (descending)
+    corpus = [
+        CorpusWord(word=word, count=count)
+        for word, count in sorted(word_counts.items(), key=lambda x: x[1], reverse=True)
+    ]
 
     logger.info(f"Parsed {len(corpus)} unique words from Leipzig corpus")
     return corpus

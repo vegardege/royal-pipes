@@ -1,31 +1,17 @@
 import re
 from collections import Counter
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from royal_pipes.statistics import WeightedLogOddsResult, weighted_log_odds
-
-
-@dataclass
-class WLOComparison:
-    """Metadata for a weighted log-odds comparison.
-
-    Attributes:
-        comparison_type: Type of comparison ('monarch', 'decade')
-        focal_value: The focal group being compared (e.g., 'Margrethe', '2000s')
-        background_type: What the focal is compared against (e.g., 'other_monarchs')
-        alpha: Dirichlet prior strength parameter used
-        focal_corpus_size: Total word count in focal corpus
-        background_corpus_size: Total word count in background corpus
-    """
-
-    comparison_type: str
-    focal_value: str
-    background_type: str
-    alpha: float
-    focal_corpus_size: int
-    background_corpus_size: int
+from royal_pipes.models import (
+    ComparisonResult,
+    Monarch,
+    OddsCount,
+    Speech,
+    WLOComparison,
+    WordCount,
+)
+from royal_pipes.statistics import weighted_log_odds
 
 
 def expand_odds_word(word: str) -> list[str]:
@@ -174,17 +160,17 @@ def read_stopwords() -> set[str]:
         return set(line.strip().lower() for line in f if line.strip())
 
 
-def compute_word_counts(speeches_dir: str | Path) -> list[tuple[int, str, int, bool]]:
+def compute_word_counts(speeches_dir: str | Path) -> list[WordCount]:
     """Compute word counts across all speech files.
 
     Args:
         speeches_dir: Directory containing YYYY.txt speech files
 
     Returns:
-        List of (year, word, count, is_stopword) tuples with lowercase cleaned words
+        List of WordCount objects with lowercase cleaned words
     """
     speeches_path = Path(speeches_dir)
-    word_counts: list[tuple[int, str, int, bool]] = []
+    word_counts: list[WordCount] = []
 
     stopwords = read_stopwords()
 
@@ -202,14 +188,16 @@ def compute_word_counts(speeches_dir: str | Path) -> list[tuple[int, str, int, b
 
         for word, count in word_counter.items():
             is_stopword = word in stopwords
-            word_counts.append((year, word, count, is_stopword))
+            word_counts.append(
+                WordCount(year=year, word=word, count=count, is_stopword=is_stopword)
+            )
 
     return word_counts
 
 
 def compute_odds_counts(
     speeches_dir: str | Path, odds_words: list[str]
-) -> list[tuple[int, str, int]]:
+) -> list[OddsCount]:
     """Count occurrences of betting odds words in historical speeches.
 
     Args:
@@ -217,7 +205,7 @@ def compute_odds_counts(
         odds_words: List of odds words to count (e.g., ["Politi/-et", "AI", "Søens Folk"])
 
     Returns:
-        List of (year, odds_word, count) tuples where count is the total
+        List of OddsCount objects where count is the total
         occurrences of all variants of the odds word
 
     Examples:
@@ -225,7 +213,7 @@ def compute_odds_counts(
         For "Søens Folk", counts exact phrase "søens folk".
     """
     speeches_path = Path(speeches_dir)
-    odds_counts: list[tuple[int, str, int]] = []
+    odds_counts: list[OddsCount] = []
 
     for speech_file in sorted(speeches_path.glob("*.txt")):
         year = int(speech_file.stem)
@@ -248,76 +236,74 @@ def compute_odds_counts(
                     # For multi-word phrases, count exact matches
                     total_count += text_lower.count(variant)
 
-            odds_counts.append((year, odds_word, total_count))
+            odds_counts.append(OddsCount(year=year, word=odds_word, count=total_count))
 
     return odds_counts
 
 
 def compute_speeches(
     years: list[int],
-    monarchs: list[tuple[str, int, int | None]],
-) -> list[tuple[int, str]]:
+    monarchs: list[Monarch],
+) -> list[Speech]:
     """Combine years with monarch data.
 
     Args:
         years: List of years for which speeches exist
-        monarchs: List of (name, start_year, end_year) tuples where end_year
-                  is None if still reigning
+        monarchs: List of Monarch objects
 
     Returns:
-        List of (year, monarch_name) tuples for speeches
+        List of Speech objects
 
     Examples:
         >>> years = [1940, 1950]
-        >>> monarchs = [("Christian X", 1912, 1947), ("Frederick IX", 1948, 1971)]
+        >>> monarchs = [Monarch("Christian X", 1912, 1947), Monarch("Frederick IX", 1948, 1971)]
         >>> compute_speeches(years, monarchs)
-        [(1940, "Christian X"), (1950, "Frederick IX")]
+        [Speech(1940, "Christian X"), Speech(1950, "Frederick IX")]
     """
     # Build a mapping of year -> monarch name for years they reigned on Dec 31
     year_to_monarch: dict[int, str] = {}
     current_year = datetime.now().year
 
-    for name, start_year, end_year in monarchs:
-        if end_year is None:
-            end_year = current_year
+    for monarch in monarchs:
+        end_year = monarch.end_year if monarch.end_year is not None else current_year
 
-        for year in range(start_year, end_year + 1):
-            year_to_monarch[year] = name
+        for year in range(monarch.start_year, end_year + 1):
+            year_to_monarch[year] = monarch.name
 
     # Combine years with monarch data
-    speeches: list[tuple[int, str]] = []
+    speeches: list[Speech] = []
     for year in years:
-        monarch = year_to_monarch.get(year)
-        if monarch is not None:
-            speeches.append((year, monarch))
+        monarch_name = year_to_monarch.get(year)
+        if monarch_name is not None:
+            speeches.append(Speech(year=year, monarch=monarch_name))
 
     return speeches
 
 
 def compute_monarch_comparisons(
-    word_counts: list[tuple[int, str, int, bool]],
-    speeches: list[tuple[int, str]],
+    word_counts: list[WordCount],
+    speeches: list[Speech],
     alpha: float = 0.01,
     min_count: int = 3,
     top_n: int = 20,
-) -> list[tuple[WLOComparison, list[WeightedLogOddsResult]]]:
+) -> list[ComparisonResult]:
     """Compute weighted log-odds comparisons for each monarch vs others.
 
     Args:
-        word_counts: List of (year, word, count, is_stopword) tuples from database
-        speeches: List of (year, monarch) tuples from database
+        word_counts: List of WordCount objects from database
+        speeches: List of Speech objects from database
         alpha: Dirichlet prior strength parameter
         min_count: Minimum total count to include a word
         top_n: Number of top words to return per comparison
 
     Returns:
-        List of (comparison_metadata, top_words) tuples, one per monarch
+        List of ComparisonResult objects, one per monarch
     """
     # Build year -> monarch mapping
-    year_to_monarch = {year: monarch for year, monarch in speeches}
+    year_to_monarch = {speech.year: speech.monarch for speech in speeches}
 
     # Get unique monarchs
-    monarchs = sorted(set(monarch for _, monarch in speeches))
+    monarchs = sorted(set(speech.monarch for speech in speeches))
 
     results = []
 
@@ -327,13 +313,13 @@ def compute_monarch_comparisons(
         focal_counts: dict[str, int] = {}
         background_counts: dict[str, int] = {}
 
-        for year, word, count, is_stopword in word_counts:
-            monarch = year_to_monarch.get(year)
+        for word_count in word_counts:
+            monarch = year_to_monarch.get(word_count.year)
             if monarch is None:
                 continue
 
             # Normalize word for comparison (merges 'aa' → 'å', etc.)
-            normalized_word = normalize_for_wlo(word)
+            normalized_word = normalize_for_wlo(word_count.word)
 
             # Skip pure numbers (years, dates, etc.)
             if normalized_word.isdigit():
@@ -341,11 +327,11 @@ def compute_monarch_comparisons(
 
             if monarch == focal_monarch:
                 focal_counts[normalized_word] = (
-                    focal_counts.get(normalized_word, 0) + count
+                    focal_counts.get(normalized_word, 0) + word_count.count
                 )
             else:
                 background_counts[normalized_word] = (
-                    background_counts.get(normalized_word, 0) + count
+                    background_counts.get(normalized_word, 0) + word_count.count
                 )
 
         # Compute weighted log-odds
@@ -366,30 +352,30 @@ def compute_monarch_comparisons(
             background_corpus_size=sum(background_counts.values()),
         )
 
-        results.append((comparison, top_words))
+        results.append(ComparisonResult(comparison=comparison, top_words=top_words))
 
     return results
 
 
 def compute_decade_comparisons(
-    word_counts: list[tuple[int, str, int, bool]],
+    word_counts: list[WordCount],
     alpha: float = 0.01,
     min_count: int = 3,
     top_n: int = 20,
-) -> list[tuple[WLOComparison, list[WeightedLogOddsResult]]]:
+) -> list[ComparisonResult]:
     """Compute weighted log-odds comparisons for each decade vs others.
 
     Args:
-        word_counts: List of (year, word, count, is_stopword) tuples from database
+        word_counts: List of WordCount objects from database
         alpha: Dirichlet prior strength parameter
         min_count: Minimum total count to include a word
         top_n: Number of top words to return per comparison
 
     Returns:
-        List of (comparison_metadata, top_words) tuples, one per decade
+        List of ComparisonResult objects, one per decade
     """
     # Get all decades present in data
-    decades = sorted(set((year // 10) * 10 for year, _, _, _ in word_counts))
+    decades = sorted(set((wc.year // 10) * 10 for wc in word_counts))
 
     results = []
 
@@ -399,11 +385,11 @@ def compute_decade_comparisons(
         focal_counts: dict[str, int] = {}
         background_counts: dict[str, int] = {}
 
-        for year, word, count, is_stopword in word_counts:
-            decade = (year // 10) * 10
+        for word_count in word_counts:
+            decade = (word_count.year // 10) * 10
 
             # Normalize word for comparison (merges 'aa' → 'å', etc.)
-            normalized_word = normalize_for_wlo(word)
+            normalized_word = normalize_for_wlo(word_count.word)
 
             # Skip pure numbers (years, dates, etc.)
             if normalized_word.isdigit():
@@ -411,11 +397,11 @@ def compute_decade_comparisons(
 
             if decade == focal_decade:
                 focal_counts[normalized_word] = (
-                    focal_counts.get(normalized_word, 0) + count
+                    focal_counts.get(normalized_word, 0) + word_count.count
                 )
             else:
                 background_counts[normalized_word] = (
-                    background_counts.get(normalized_word, 0) + count
+                    background_counts.get(normalized_word, 0) + word_count.count
                 )
 
         # Compute weighted log-odds
@@ -436,6 +422,6 @@ def compute_decade_comparisons(
             background_corpus_size=sum(background_counts.values()),
         )
 
-        results.append((comparison, top_words))
+        results.append(ComparisonResult(comparison=comparison, top_words=top_words))
 
     return results

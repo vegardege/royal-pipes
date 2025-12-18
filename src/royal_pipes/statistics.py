@@ -5,29 +5,8 @@ with no project-specific dependencies.
 """
 
 import math
-from dataclasses import dataclass
 
-
-@dataclass
-class WeightedLogOddsResult:
-    """Result of a weighted log-odds comparison for a single word.
-
-    Attributes:
-        word: The word being compared
-        wlo_score: The weighted log-odds score (higher = more distinctive to focal)
-        focal_count: Raw count of word in focal corpus
-        background_count: Raw count of word in background corpus
-        focal_rate: Usage rate in focal corpus (count / total_words)
-        background_rate: Usage rate in background corpus
-        z_score: Z-score of the weighted log-odds (for significance testing)
-    """
-    word: str
-    wlo_score: float
-    focal_count: int
-    background_count: int
-    focal_rate: float
-    background_rate: float
-    z_score: float
+from royal_pipes.models import WeightedLogOddsResult
 
 
 def weighted_log_odds(

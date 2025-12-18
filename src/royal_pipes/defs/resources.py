@@ -1,6 +1,13 @@
 import dagster as dg
 
 from royal_pipes import db
+from royal_pipes.models import (
+    ComparisonResult,
+    CorpusWordWithFrequency,
+    OddsCount,
+    Speech,
+    WordCount,
+)
 
 
 class AnalyticsDB(dg.ConfigurableResource):
@@ -20,7 +27,7 @@ class AnalyticsDB(dg.ConfigurableResource):
         """Ensure the word_count table exists."""
         db.ensure_word_count_table(self.db_path)
 
-    def replace_word_count(self, word_counts: list[tuple[int, str, int, bool]]) -> None:
+    def replace_word_count(self, word_counts: list[WordCount]) -> None:
         """Replace all word counts in the database."""
         db.replace_word_count(self.db_path, word_counts)
 
@@ -36,7 +43,7 @@ class AnalyticsDB(dg.ConfigurableResource):
         """Ensure the odds_count table exists."""
         db.ensure_odds_count_table(self.db_path)
 
-    def replace_odds_counts(self, odds_counts: list[tuple[int, str, int]]) -> None:
+    def replace_odds_counts(self, odds_counts: list[OddsCount]) -> None:
         """Replace all odds counts in the database."""
         db.replace_odds_counts(self.db_path, odds_counts)
 
@@ -44,7 +51,7 @@ class AnalyticsDB(dg.ConfigurableResource):
         """Ensure the speech table exists."""
         db.ensure_speech_table(self.db_path)
 
-    def replace_speech(self, speeches: list[tuple[int, str]]) -> None:
+    def replace_speech(self, speeches: list[Speech]) -> None:
         """Replace all speeches in the database."""
         db.replace_speech(self.db_path, speeches)
 
@@ -52,7 +59,7 @@ class AnalyticsDB(dg.ConfigurableResource):
         """Ensure the corpus table exists."""
         db.ensure_corpus_table(self.db_path)
 
-    def replace_corpus(self, corpus: list[tuple[str, int, float]]) -> None:
+    def replace_corpus(self, corpus: list[CorpusWordWithFrequency]) -> None:
         """Replace all corpus data in the database."""
         db.replace_corpus(self.db_path, corpus)
 
@@ -62,8 +69,7 @@ class AnalyticsDB(dg.ConfigurableResource):
 
     def replace_wlo_comparisons(
         self,
-        comparisons: list[tuple[str, str, str, str, float, int, int]],
-        words: list[tuple[str, int, str, float, int, int, float, float, float]],
+        comparison_results: list[ComparisonResult],
     ) -> None:
         """Replace all WLO comparison data in the database."""
-        db.replace_wlo_comparisons(self.db_path, comparisons, words)
+        db.replace_wlo_comparisons(self.db_path, comparison_results)

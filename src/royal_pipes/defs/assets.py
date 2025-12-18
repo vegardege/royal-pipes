@@ -14,6 +14,7 @@ from royal_pipes.extract import (
     load_official_speech,
     load_official_speeches,
 )
+from royal_pipes.models import CorpusWordWithFrequency, Monarch
 from royal_pipes.transform import (
     compute_decade_comparisons,
     compute_monarch_comparisons,
@@ -394,19 +395,19 @@ def odds_count_valid(
 )
 async def wikipedia_monarchs(
     context: dg.AssetExecutionContext,
-) -> list[tuple[str, int, int | None]]:
+) -> list[Monarch]:
     """Download the list of Danish monarchs from Wikipedia.
 
     Returns monarchs from 1941 onwards (when New Year speeches began).
-    Each monarch is represented as (name, start_year, end_year) where
-    end_year is None for the current monarch.
+    Each monarch is represented as a Monarch object where end_year is None
+    for the current monarch.
     """
     context.log.info("Downloading monarchs from Wikipedia")
     monarchs_data = await load_monarchs()
     context.log.info(f"Found {len(monarchs_data)} monarchs from 1941 onwards")
 
-    for name, start_year, end_year in monarchs_data:
-        context.log.info(f"  {name}: {start_year}–{end_year or 'present'}")
+    for monarch in monarchs_data:
+        context.log.info(f"  {monarch.name}: {monarch.start_year}–{monarch.end_year or 'present'}")
 
     return monarchs_data
 
@@ -414,23 +415,23 @@ async def wikipedia_monarchs(
 @dg.asset_check(asset=wikipedia_monarchs)
 def monarchs_data_valid(
     _: dg.AssetCheckExecutionContext,
-    wikipedia_monarchs: list[tuple[str, int, int | None]],
+    wikipedia_monarchs: list[Monarch],
 ) -> dg.AssetCheckResult:
     """Check that monarch data is complete and valid."""
     min_monarchs = 3  # Expect at least 3 monarchs since 1941
     count = len(wikipedia_monarchs)
 
     issues = []
-    current_monarch_count = sum(1 for _, _, end in wikipedia_monarchs if end is None)
+    current_monarch_count = sum(1 for m in wikipedia_monarchs if m.end_year is None)
 
     if current_monarch_count != 1:
         issues.append(
             f"Expected 1 current monarch (end_year=None), found {current_monarch_count}"
         )
 
-    for name, start, end in wikipedia_monarchs:
-        if end is not None and end < start:
-            issues.append(f"{name} ends before starting: {start}-{end}")
+    for monarch in wikipedia_monarchs:
+        if monarch.end_year is not None and monarch.end_year < monarch.start_year:
+            issues.append(f"{monarch.name} ends before starting: {monarch.start_year}-{monarch.end_year}")
 
     passed = count >= min_monarchs and len(issues) == 0
 
@@ -459,7 +460,7 @@ def monarchs_data_valid(
 def speech(
     context: dg.AssetExecutionContext,
     analytics_db: AnalyticsDB,
-    wikipedia_monarchs: list[tuple[str, int, int | None]],
+    wikipedia_monarchs: list[Monarch],
 ) -> None:
     """Compute speech metadata and store in SQLite.
 
@@ -477,8 +478,8 @@ def speech(
 
     if speeches_data:
         context.log.info("Sample speeches:")
-        for year, monarch in speeches_data[:3]:
-            context.log.info(f"  {year}: {monarch}")
+        for speech_data in speeches_data[:3]:
+            context.log.info(f"  {speech_data.year}: {speech_data.monarch}")
 
     analytics_db.replace_speech(speeches_data)
     context.log.info(f"Stored speech metadata to {analytics_db.db_path}")
@@ -544,30 +545,37 @@ def speech_has_monarchs(
 )
 async def leipzig_corpus(
     context: dg.AssetExecutionContext,
-) -> list[tuple[str, int]]:
+) -> list[CorpusWordWithFrequency]:
     """Download Danish word frequency data from Leipzig Corpora Collection.
 
     Downloads the Mixed 1M dataset containing Danish word frequencies from
     the Leipzig Wortschatz project. This provides a general Danish language
     corpus for comparison with the speech word frequencies.
 
-    Returns a list of (word, count) tuples from the corpus.
+    Returns a list of CorpusWordWithFrequency objects with frequencies calculated.
     """
     context.log.info("Downloading Leipzig Corpora Collection dataset")
-    corpus = await load_leipzig_corpus()
-    context.log.info(f"Downloaded {len(corpus)} words from Leipzig corpus")
+    corpus_words = await load_leipzig_corpus()
+    context.log.info(f"Downloaded {len(corpus_words)} words from Leipzig corpus")
+
+    # Calculate frequencies
+    total_count = sum(word.count for word in corpus_words)
+    context.log.info(f"Total word occurrences: {total_count:,}")
+
+    corpus = [
+        CorpusWordWithFrequency(word=cw.word, count=cw.count, frequency=cw.count / total_count)
+        for cw in corpus_words
+    ]
 
     if corpus:
-        total_count = sum(count for _, count in corpus)
-        context.log.info(f"Total word occurrences: {total_count:,}")
-        context.log.info(f"Top 5 most frequent words: {corpus[:5]}")
+        context.log.info(f"Top 5 most frequent words: {[(c.word, c.count) for c in corpus[:5]]}")
 
     return corpus
 
 
 @dg.asset_check(asset=leipzig_corpus)
 def corpus_minimum_words(
-    _: dg.AssetCheckExecutionContext, leipzig_corpus: list[tuple[str, int]]
+    _: dg.AssetCheckExecutionContext, leipzig_corpus: list[CorpusWordWithFrequency]
 ) -> dg.AssetCheckResult:
     """Check that the Leipzig corpus contains a minimum number of words."""
     min_words = 100_000  # Expect at least 100k words from a 1M corpus
@@ -589,23 +597,18 @@ def corpus_minimum_words(
 def corpus(
     context: dg.AssetExecutionContext,
     analytics_db: AnalyticsDB,
-    leipzig_corpus: list[tuple[str, int]],
+    leipzig_corpus: list[CorpusWordWithFrequency],
 ) -> None:
     """Store Leipzig corpus word frequencies in the SQLite database.
 
     This table is atomically replaced each time the asset is materialized.
     """
-    context.log.info(f"Calculating frequencies for {len(leipzig_corpus)} words")
+    context.log.info(f"Storing {len(leipzig_corpus)} words to database")
 
-    total_count = sum(count for _, count in leipzig_corpus)
+    total_count = sum(word.count for word in leipzig_corpus)
     context.log.info(f"Total word occurrences in corpus: {total_count:,}")
 
-    corpus_with_freq = [
-        (word, count, count / total_count) for word, count in leipzig_corpus
-    ]
-
-    context.log.info(f"Storing {len(corpus_with_freq)} words to database")
-    analytics_db.replace_corpus(corpus_with_freq)
+    analytics_db.replace_corpus(leipzig_corpus)
     context.log.info(f"Stored corpus to {analytics_db.db_path}")
 
 
@@ -697,13 +700,18 @@ def wlo_comparisons(
     )
 
     # Read word counts and speech metadata from database
+    # Import here to avoid circular dependency with models
+    from royal_pipes.models import Speech, WordCount
+
     with analytics_db.get_connection() as conn:
         cursor = conn.execute("SELECT year, word, count, is_stopword FROM word_count")
-        word_counts = cursor.fetchall()
+        word_counts_tuples = cursor.fetchall()
+        word_counts = [WordCount(year=row[0], word=row[1], count=row[2], is_stopword=row[3]) for row in word_counts_tuples]
         context.log.info(f"Loaded {len(word_counts)} word-year pairs from database")
 
         cursor = conn.execute("SELECT year, monarch FROM speech")
-        speeches = cursor.fetchall()
+        speeches_tuples = cursor.fetchall()
+        speeches = [Speech(year=row[0], monarch=row[1]) for row in speeches_tuples]
         context.log.info(f"Loaded {len(speeches)} speech-monarch pairs from database")
 
     # Compute monarch comparisons
@@ -720,54 +728,24 @@ def wlo_comparisons(
     )
     context.log.info(f"Generated {len(decade_results)} decade comparisons")
 
-    # Combine all results and format for database
-    all_comparisons = []
-    all_words = []
-
-    for comparison, top_words in monarch_results + decade_results:
-        # Generate human-readable comparison ID
-        comparison_id = f"{comparison.comparison_type}:{comparison.focal_value}"
-
-        # Add comparison metadata
-        all_comparisons.append((
-            comparison_id,
-            comparison.comparison_type,
-            comparison.focal_value,
-            comparison.background_type,
-            comparison.alpha,
-            comparison.focal_corpus_size,
-            comparison.background_corpus_size,
-        ))
-
-        # Add top words with ranks
-        for rank, result in enumerate(top_words, start=1):
-            all_words.append((
-                comparison_id,
-                rank,
-                result.word,
-                result.wlo_score,
-                result.focal_count,
-                result.background_count,
-                result.focal_rate,
-                result.background_rate,
-                result.z_score,
-            ))
+    # Combine all results
+    all_results = monarch_results + decade_results
 
     # Store in database
     context.log.info(
-        f"Storing {len(all_comparisons)} comparisons with {len(all_words)} top words"
+        f"Storing {len(all_results)} comparisons"
     )
-    analytics_db.replace_wlo_comparisons(all_comparisons, all_words)
+    analytics_db.replace_wlo_comparisons(all_results)
     context.log.info(f"Stored WLO comparisons to {analytics_db.db_path}")
 
     # Log sample results
     if monarch_results:
-        comparison, top_words = monarch_results[0]
+        result = monarch_results[0]
         context.log.info(
-            f"Sample: {comparison.focal_value} vs {comparison.background_type}"
+            f"Sample: {result.comparison.focal_value} vs {result.comparison.background_type}"
         )
-        if top_words:
-            context.log.info(f"  Top word: '{top_words[0].word}' (score: {top_words[0].wlo_score:.3f})")
+        if result.top_words:
+            context.log.info(f"  Top word: '{result.top_words[0].word}' (score: {result.top_words[0].wlo_score:.3f})")
 
 
 @dg.asset_check(asset=wlo_comparisons)

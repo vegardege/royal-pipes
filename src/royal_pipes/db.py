@@ -1,6 +1,8 @@
 import sqlite3
 from pathlib import Path
 
+from royal_pipes.models import ComparisonResult, CorpusWordWithFrequency, OddsCount, Speech, WordCount
+
 SPEECH_TABLE = """
     CREATE TABLE IF NOT EXISTS speech (
         year INTEGER PRIMARY KEY NOT NULL,
@@ -97,13 +99,13 @@ def ensure_word_count_table(db_path: str | Path) -> None:
 
 
 def replace_word_count(
-    db_path: str | Path, word_counts: list[tuple[int, str, int, bool]]
+    db_path: str | Path, word_counts: list[WordCount]
 ) -> None:
     """Replace all word counts in the database.
 
     Args:
         db_path: Path to the SQLite database file
-        word_counts: List of (year, word, count) tuples
+        word_counts: List of WordCount objects
 
     This atomically replaces the entire table contents.
     """
@@ -113,7 +115,7 @@ def replace_word_count(
         conn.execute("DELETE FROM word_count")
         conn.executemany(
             "INSERT INTO word_count (year, word, count, is_stopword) VALUES (?, ?, ?, ?)",
-            word_counts,
+            [(wc.year, wc.word, wc.count, wc.is_stopword) for wc in word_counts],
         )
         conn.commit()
 
@@ -161,13 +163,13 @@ def ensure_odds_count_table(db_path: str | Path) -> None:
 
 
 def replace_odds_counts(
-    db_path: str | Path, odds_counts: list[tuple[int, str, int]]
+    db_path: str | Path, odds_counts: list[OddsCount]
 ) -> None:
     """Replace all odds counts in the database.
 
     Args:
         db_path: Path to the SQLite database file
-        odds_counts: List of (year, word, count) tuples
+        odds_counts: List of OddsCount objects
 
     This atomically replaces the entire table contents.
     """
@@ -177,7 +179,7 @@ def replace_odds_counts(
         conn.execute("DELETE FROM odds_count")
         conn.executemany(
             "INSERT INTO odds_count (year, word, count) VALUES (?, ?, ?)",
-            odds_counts,
+            [(oc.year, oc.word, oc.count) for oc in odds_counts],
         )
         conn.commit()
 
@@ -193,12 +195,12 @@ def ensure_speech_table(db_path: str | Path) -> None:
         conn.commit()
 
 
-def replace_speech(db_path: str | Path, speeches: list[tuple[int, str]]) -> None:
+def replace_speech(db_path: str | Path, speeches: list[Speech]) -> None:
     """Replace all speeches in the database.
 
     Args:
         db_path: Path to the SQLite database file
-        speeches: List of (year, monarch) tuples
+        speeches: List of Speech objects
 
     This atomically replaces the entire table contents.
     """
@@ -208,7 +210,7 @@ def replace_speech(db_path: str | Path, speeches: list[tuple[int, str]]) -> None
         conn.execute("DELETE FROM speech")
         conn.executemany(
             "INSERT INTO speech (year, monarch) VALUES (?, ?)",
-            speeches,
+            [(s.year, s.monarch) for s in speeches],
         )
         conn.commit()
 
@@ -224,12 +226,12 @@ def ensure_corpus_table(db_path: str | Path) -> None:
         conn.commit()
 
 
-def replace_corpus(db_path: str | Path, corpus: list[tuple[str, int, float]]) -> None:
+def replace_corpus(db_path: str | Path, corpus: list[CorpusWordWithFrequency]) -> None:
     """Replace all corpus data in the database.
 
     Args:
         db_path: Path to the SQLite database file
-        corpus: List of (word, count, frequency) tuples from the Leipzig corpus
+        corpus: List of CorpusWordWithFrequency objects from the Leipzig corpus
 
     This atomically replaces the entire table contents.
     """
@@ -239,7 +241,7 @@ def replace_corpus(db_path: str | Path, corpus: list[tuple[str, int, float]]) ->
         conn.execute("DELETE FROM corpus")
         conn.executemany(
             "INSERT INTO corpus (word, count, frequency) VALUES (?, ?, ?)",
-            corpus,
+            [(c.word, c.count, c.frequency) for c in corpus],
         )
         conn.commit()
 
@@ -258,22 +260,51 @@ def ensure_wlo_tables(db_path: str | Path) -> None:
 
 def replace_wlo_comparisons(
     db_path: str | Path,
-    comparisons: list[tuple[str, str, str, str, float, int, int]],
-    words: list[tuple[str, int, str, float, int, int, float, float, float]],
+    comparison_results: list[ComparisonResult],
 ) -> None:
     """Replace all WLO comparison data in the database.
 
     Args:
         db_path: Path to the SQLite database file
-        comparisons: List of (comparison_id, comparison_type, focal_value,
-                     background_type, alpha, focal_corpus_size, background_corpus_size) tuples
-        words: List of (comparison_id, rank, word, wlo_score, focal_count,
-               background_count, focal_rate, background_rate, z_score) tuples
+        comparison_results: List of ComparisonResult objects
 
-    This atomically replaces the entire table contents. The comparison_id should be
-    a human-readable string like "monarch:Margrethe" or "decade:1990s".
+    This atomically replaces the entire table contents. The comparison_id is
+    auto-generated as "type:value" (e.g., "monarch:Margrethe" or "decade:1990s").
     """
     ensure_wlo_tables(db_path)
+
+    # Prepare data for database insertion
+    comparisons = []
+    words = []
+
+    for result in comparison_results:
+        comp = result.comparison
+        comparison_id = f"{comp.comparison_type}:{comp.focal_value}"
+
+        # Add comparison metadata
+        comparisons.append((
+            comparison_id,
+            comp.comparison_type,
+            comp.focal_value,
+            comp.background_type,
+            comp.alpha,
+            comp.focal_corpus_size,
+            comp.background_corpus_size,
+        ))
+
+        # Add top words with ranks
+        for rank, word_result in enumerate(result.top_words, start=1):
+            words.append((
+                comparison_id,
+                rank,
+                word_result.word,
+                word_result.wlo_score,
+                word_result.focal_count,
+                word_result.background_count,
+                word_result.focal_rate,
+                word_result.background_rate,
+                word_result.z_score,
+            ))
 
     with get_connection(db_path) as conn:
         # Clear existing data
