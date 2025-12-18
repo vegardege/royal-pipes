@@ -1,10 +1,10 @@
 import re
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from dataclasses import dataclass
 
-from royal_pipes.statistics import weighted_log_odds, WeightedLogOddsResult
+from royal_pipes.statistics import WeightedLogOddsResult, weighted_log_odds
 
 
 @dataclass
@@ -19,6 +19,7 @@ class WLOComparison:
         focal_corpus_size: Total word count in focal corpus
         background_corpus_size: Total word count in background corpus
     """
+
     comparison_type: str
     focal_value: str
     background_type: str
@@ -96,10 +97,30 @@ def normalize_text(text: str) -> str:
     # Only remove acute and grave accents, preserve Nordic characters
     # Map specific accented characters to their base forms
     accent_map = {
-        'á': 'a', 'à': 'a', 'é': 'e', 'è': 'e', 'í': 'i', 'ì': 'i',
-        'ó': 'o', 'ò': 'o', 'ú': 'u', 'ù': 'u', 'ý': 'y', 'ỳ': 'y',
-        'Á': 'a', 'À': 'a', 'É': 'e', 'È': 'e', 'Í': 'i', 'Ì': 'i',
-        'Ó': 'o', 'Ò': 'o', 'Ú': 'u', 'Ù': 'u', 'Ý': 'y', 'Ỳ': 'y',
+        "á": "a",
+        "à": "a",
+        "é": "e",
+        "è": "e",
+        "í": "i",
+        "ì": "i",
+        "ó": "o",
+        "ò": "o",
+        "ú": "u",
+        "ù": "u",
+        "ý": "y",
+        "ỳ": "y",
+        "Á": "a",
+        "À": "a",
+        "É": "e",
+        "È": "e",
+        "Í": "i",
+        "Ì": "i",
+        "Ó": "o",
+        "Ò": "o",
+        "Ú": "u",
+        "Ù": "u",
+        "Ý": "y",
+        "Ỳ": "y",
     }
 
     # Replace accented characters
@@ -137,7 +158,7 @@ def normalize_for_wlo(word: str) -> str:
         like "Aarhus" that were already extracted as complete tokens.
     """
     # Normalize 'aa' to 'å' before lowercasing to handle 'Aa' correctly
-    word = word.replace('Aa', 'Å').replace('AA', 'Å').replace('aa', 'å')
+    word = word.replace("Aa", "Å").replace("AA", "Å").replace("aa", "å")
     return word.lower()
 
 
@@ -175,7 +196,8 @@ def compute_word_counts(speeches_dir: str | Path) -> list[tuple[int, str, int, b
 
         # Extract words: allow letters, digits, underscores, and apostrophes
         # This captures words like "80'erne" as a single token
-        words = re.findall(r"[\w']+", normalized)
+        # Apostrophes must be surrounded by word characters (no standalone ')
+        words = re.findall(r"\w+(?:'\w+)*", normalized)
         word_counter = Counter(words)
 
         for word, count in word_counter.items():
@@ -276,7 +298,7 @@ def compute_monarch_comparisons(
     word_counts: list[tuple[int, str, int, bool]],
     speeches: list[tuple[int, str]],
     alpha: float = 0.01,
-    min_count: int = 5,
+    min_count: int = 3,
     top_n: int = 20,
 ) -> list[tuple[WLOComparison, list[WeightedLogOddsResult]]]:
     """Compute weighted log-odds comparisons for each monarch vs others.
@@ -313,10 +335,18 @@ def compute_monarch_comparisons(
             # Normalize word for comparison (merges 'aa' → 'å', etc.)
             normalized_word = normalize_for_wlo(word)
 
+            # Skip pure numbers (years, dates, etc.)
+            if normalized_word.isdigit():
+                continue
+
             if monarch == focal_monarch:
-                focal_counts[normalized_word] = focal_counts.get(normalized_word, 0) + count
+                focal_counts[normalized_word] = (
+                    focal_counts.get(normalized_word, 0) + count
+                )
             else:
-                background_counts[normalized_word] = background_counts.get(normalized_word, 0) + count
+                background_counts[normalized_word] = (
+                    background_counts.get(normalized_word, 0) + count
+                )
 
         # Compute weighted log-odds
         wlo_results = weighted_log_odds(
@@ -344,7 +374,7 @@ def compute_monarch_comparisons(
 def compute_decade_comparisons(
     word_counts: list[tuple[int, str, int, bool]],
     alpha: float = 0.01,
-    min_count: int = 5,
+    min_count: int = 3,
     top_n: int = 20,
 ) -> list[tuple[WLOComparison, list[WeightedLogOddsResult]]]:
     """Compute weighted log-odds comparisons for each decade vs others.
@@ -375,10 +405,18 @@ def compute_decade_comparisons(
             # Normalize word for comparison (merges 'aa' → 'å', etc.)
             normalized_word = normalize_for_wlo(word)
 
+            # Skip pure numbers (years, dates, etc.)
+            if normalized_word.isdigit():
+                continue
+
             if decade == focal_decade:
-                focal_counts[normalized_word] = focal_counts.get(normalized_word, 0) + count
+                focal_counts[normalized_word] = (
+                    focal_counts.get(normalized_word, 0) + count
+                )
             else:
-                background_counts[normalized_word] = background_counts.get(normalized_word, 0) + count
+                background_counts[normalized_word] = (
+                    background_counts.get(normalized_word, 0) + count
+                )
 
         # Compute weighted log-odds
         wlo_results = weighted_log_odds(
