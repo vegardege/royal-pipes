@@ -44,7 +44,7 @@ CORPUS_TABLE = """
 
 WLO_COMPARISONS_TABLE = """
     CREATE TABLE IF NOT EXISTS wlo_comparisons (
-        comparison_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        comparison_id TEXT PRIMARY KEY NOT NULL,
         comparison_type TEXT NOT NULL,
         focal_value TEXT NOT NULL,
         background_type TEXT NOT NULL,
@@ -56,7 +56,7 @@ WLO_COMPARISONS_TABLE = """
 
 WLO_WORDS_TABLE = """
     CREATE TABLE IF NOT EXISTS wlo_words (
-        comparison_id INTEGER NOT NULL,
+        comparison_id TEXT NOT NULL,
         rank INTEGER NOT NULL,
         word TEXT NOT NULL,
         wlo_score REAL NOT NULL,
@@ -258,20 +258,20 @@ def ensure_wlo_tables(db_path: str | Path) -> None:
 
 def replace_wlo_comparisons(
     db_path: str | Path,
-    comparisons: list[tuple[str, str, str, float, int, int]],
-    words: list[tuple[int, int, str, float, int, int, float, float, float]],
+    comparisons: list[tuple[str, str, str, str, float, int, int]],
+    words: list[tuple[str, int, str, float, int, int, float, float, float]],
 ) -> None:
     """Replace all WLO comparison data in the database.
 
     Args:
         db_path: Path to the SQLite database file
-        comparisons: List of (comparison_type, focal_value, background_type,
-                     alpha, focal_corpus_size, background_corpus_size) tuples
+        comparisons: List of (comparison_id, comparison_type, focal_value,
+                     background_type, alpha, focal_corpus_size, background_corpus_size) tuples
         words: List of (comparison_id, rank, word, wlo_score, focal_count,
                background_count, focal_rate, background_rate, z_score) tuples
 
-    This atomically replaces the entire table contents. The comparison_id values
-    in the words list should match the row number (1-indexed) in the comparisons list.
+    This atomically replaces the entire table contents. The comparison_id should be
+    a human-readable string like "monarch:Margrethe" or "decade:1990s".
     """
     ensure_wlo_tables(db_path)
 
@@ -283,9 +283,9 @@ def replace_wlo_comparisons(
         # Insert comparisons
         conn.executemany(
             """INSERT INTO wlo_comparisons
-               (comparison_type, focal_value, background_type, alpha,
+               (comparison_id, comparison_type, focal_value, background_type, alpha,
                 focal_corpus_size, background_corpus_size)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             comparisons,
         )
 

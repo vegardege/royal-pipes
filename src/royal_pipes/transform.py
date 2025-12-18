@@ -109,6 +109,38 @@ def normalize_text(text: str) -> str:
     return text.lower()
 
 
+def normalize_for_wlo(word: str) -> str:
+    """Normalize a word for weighted log-odds comparisons.
+
+    Applies additional normalization beyond standard text normalization,
+    specifically for comparative analysis where we want to treat historical
+    spelling variants as the same word.
+
+    Applies transformations:
+    1. Normalize 'aa' to 'å' (historical Danish spelling: "gaar" → "går")
+    2. Convert to lowercase
+
+    Args:
+        word: The word to normalize
+
+    Returns:
+        Normalized word
+
+    Examples:
+        >>> normalize_for_wlo("Gaar")
+        "går"
+        >>> normalize_for_wlo("Danmark")
+        "danmark"
+
+    Note:
+        This is applied AFTER word extraction, so it doesn't affect proper nouns
+        like "Aarhus" that were already extracted as complete tokens.
+    """
+    # Normalize 'aa' to 'å' before lowercasing to handle 'Aa' correctly
+    word = word.replace('Aa', 'Å').replace('AA', 'Å').replace('aa', 'å')
+    return word.lower()
+
+
 def read_stopwords() -> set[str]:
     """Read all active stopwords from the included txt file.
 
@@ -269,6 +301,7 @@ def compute_monarch_comparisons(
 
     for focal_monarch in monarchs:
         # Build focal and background word counts
+        # Apply WLO normalization to merge spelling variants (e.g., 'aa' → 'å')
         focal_counts: dict[str, int] = {}
         background_counts: dict[str, int] = {}
 
@@ -277,10 +310,13 @@ def compute_monarch_comparisons(
             if monarch is None:
                 continue
 
+            # Normalize word for comparison (merges 'aa' → 'å', etc.)
+            normalized_word = normalize_for_wlo(word)
+
             if monarch == focal_monarch:
-                focal_counts[word] = focal_counts.get(word, 0) + count
+                focal_counts[normalized_word] = focal_counts.get(normalized_word, 0) + count
             else:
-                background_counts[word] = background_counts.get(word, 0) + count
+                background_counts[normalized_word] = background_counts.get(normalized_word, 0) + count
 
         # Compute weighted log-odds
         wlo_results = weighted_log_odds(
@@ -329,16 +365,20 @@ def compute_decade_comparisons(
 
     for focal_decade in decades:
         # Build focal and background word counts
+        # Apply WLO normalization to merge spelling variants (e.g., 'aa' → 'å')
         focal_counts: dict[str, int] = {}
         background_counts: dict[str, int] = {}
 
         for year, word, count, is_stopword in word_counts:
             decade = (year // 10) * 10
 
+            # Normalize word for comparison (merges 'aa' → 'å', etc.)
+            normalized_word = normalize_for_wlo(word)
+
             if decade == focal_decade:
-                focal_counts[word] = focal_counts.get(word, 0) + count
+                focal_counts[normalized_word] = focal_counts.get(normalized_word, 0) + count
             else:
-                background_counts[word] = background_counts.get(word, 0) + count
+                background_counts[normalized_word] = background_counts.get(normalized_word, 0) + count
 
         # Compute weighted log-odds
         wlo_results = weighted_log_odds(

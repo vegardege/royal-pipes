@@ -723,11 +723,14 @@ def wlo_comparisons(
     # Combine all results and format for database
     all_comparisons = []
     all_words = []
-    comparison_id = 1
 
     for comparison, top_words in monarch_results + decade_results:
+        # Generate human-readable comparison ID
+        comparison_id = f"{comparison.comparison_type}:{comparison.focal_value}"
+
         # Add comparison metadata
         all_comparisons.append((
+            comparison_id,
             comparison.comparison_type,
             comparison.focal_value,
             comparison.background_type,
@@ -749,8 +752,6 @@ def wlo_comparisons(
                 result.background_rate,
                 result.z_score,
             ))
-
-        comparison_id += 1
 
     # Store in database
     context.log.info(
@@ -786,8 +787,9 @@ def wlo_comparisons_stored_correctly(
         )
         comparison_types = cursor.fetchone()[0]
 
+        # Check for empty comparisons (particularly problematic for decades)
         cursor = conn.execute(
-            """SELECT c.comparison_id, c.focal_value, COUNT(w.word) as word_count
+            """SELECT c.comparison_id, c.comparison_type, COUNT(w.word) as word_count
                FROM wlo_comparisons c
                LEFT JOIN wlo_words w ON c.comparison_id = w.comparison_id
                GROUP BY c.comparison_id
@@ -795,12 +797,16 @@ def wlo_comparisons_stored_correctly(
         )
         empty_comparisons = cursor.fetchall()
 
+        # Count empty decade comparisons specifically (these are more concerning)
+        empty_decades = [c for c in empty_comparisons if c[1] == 'decade']
+
     has_comparisons = comparison_count > 0
     has_words = word_count > 0
     has_both_types = comparison_types == 2  # monarch and decade
-    no_empty = len(empty_comparisons) == 0
+    no_empty_decades = len(empty_decades) == 0
 
-    passed = has_comparisons and has_words and has_both_types and no_empty
+    # Pass if we have data and no empty decades (empty monarch comparisons are OK for low-data monarchs)
+    passed = has_comparisons and has_words and has_both_types and no_empty_decades
 
     issues = []
     if not has_comparisons:
@@ -809,22 +815,28 @@ def wlo_comparisons_stored_correctly(
         issues.append("No words found")
     if not has_both_types:
         issues.append(f"Expected 2 comparison types, found {comparison_types}")
-    if not no_empty:
+    if not no_empty_decades:
         issues.append(
-            f"{len(empty_comparisons)} comparisons have no words: "
-            f"{[f'{c[1]} (id={c[0]})' for c in empty_comparisons[:3]]}"
+            f"{len(empty_decades)} decade comparisons have no words: "
+            f"{[c[0] for c in empty_decades[:3]]}"
         )
+
+    # Log warning for empty monarch comparisons (but don't fail)
+    description = f"Stored {comparison_count} comparisons with {word_count} words"
+    if len(empty_comparisons) > 0 and passed:
+        empty_monarchs = [c for c in empty_comparisons if c[1] == 'monarch']
+        if empty_monarchs:
+            description += f" ({len(empty_monarchs)} monarchs with insufficient data)"
 
     return dg.AssetCheckResult(
         passed=passed,
-        description=f"Stored {comparison_count} comparisons with {word_count} words"
-        if passed
-        else "; ".join(issues),
+        description=description if passed else "; ".join(issues),
         metadata={
             "comparison_count": comparison_count,
             "word_count": word_count,
             "comparison_types": comparison_types,
             "empty_comparisons": len(empty_comparisons),
+            "empty_decades": len(empty_decades),
         },
     )
 

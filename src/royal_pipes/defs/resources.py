@@ -62,8 +62,8 @@ class AnalyticsDB(dg.ConfigurableResource):
 
     def replace_wlo_comparisons(
         self,
-        comparisons: list[tuple[str, str, str, float, int, int]],
-        words: list[tuple[int, int, str, float, int, int, float, float, float]],
+        comparisons: list[tuple[str, str, str, str, float, int, int]],
+        words: list[tuple[str, int, str, float, int, int, float, float, float]],
     ) -> None:
         """Replace all WLO comparison data in the database."""
         db.replace_wlo_comparisons(self.db_path, comparisons, words)
