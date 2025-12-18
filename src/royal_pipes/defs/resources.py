@@ -55,3 +55,15 @@ class AnalyticsDB(dg.ConfigurableResource):
     def replace_corpus(self, corpus: list[tuple[str, int, float]]) -> None:
         """Replace all corpus data in the database."""
         db.replace_corpus(self.db_path, corpus)
+
+    def ensure_wlo_tables(self) -> None:
+        """Ensure the WLO comparison tables exist."""
+        db.ensure_wlo_tables(self.db_path)
+
+    def replace_wlo_comparisons(
+        self,
+        comparisons: list[tuple[str, str, str, float, int, int]],
+        words: list[tuple[int, int, str, float, int, int, float, float, float]],
+    ) -> None:
+        """Replace all WLO comparison data in the database."""
+        db.replace_wlo_comparisons(self.db_path, comparisons, words)

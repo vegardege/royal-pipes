@@ -15,6 +15,8 @@ from royal_pipes.extract import (
     load_official_speeches,
 )
 from royal_pipes.transform import (
+    compute_decade_comparisons,
+    compute_monarch_comparisons,
     compute_odds_counts,
     compute_speeches,
     compute_word_counts,
@@ -641,5 +643,238 @@ def corpus_stored_correctly(
             "db_count": db_count,
             "frequency_sum": round(freq_sum, 4),
             "invalid_counts": invalid_counts,
+        },
+    )
+
+
+# ==============================================================================
+# Comparative Analysis Domain: Weighted log-odds comparisons
+# ==============================================================================
+
+
+class WLOConfig(dg.Config):
+    """Configuration for weighted log-odds comparisons."""
+
+    alpha: float = Field(
+        default=0.01,
+        description="Dirichlet prior strength parameter (Monroe et al. 2008)",
+    )
+    min_count: int = Field(
+        default=5,
+        description="Minimum total count across both corpora to include a word",
+    )
+    top_n: int = Field(
+        default=20,
+        description="Number of top distinctive words to store per comparison",
+    )
+
+
+@dg.asset(
+    deps=[dg.AssetDep("word_count"), dg.AssetDep("speech")],
+    auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
+)
+def wlo_comparisons(
+    context: dg.AssetExecutionContext,
+    analytics_db: AnalyticsDB,
+    config: WLOConfig,
+) -> None:
+    """Compute weighted log-odds comparisons and store in SQLite.
+
+    Implements the "Fightin' Words" algorithm from Monroe et al. (2008) to
+    identify the most distinctive words for each monarch and decade compared
+    to all others.
+
+    Creates two types of comparisons:
+    - Monarch comparisons: Each monarch vs all other monarchs
+    - Decade comparisons: Each decade vs all other decades
+
+    Results are stored in two tables:
+    - wlo_comparisons: Metadata for each comparison
+    - wlo_words: Top N most distinctive words per comparison
+    """
+    context.log.info(
+        f"Computing WLO comparisons (alpha={config.alpha}, min_count={config.min_count}, top_n={config.top_n})"
+    )
+
+    # Read word counts and speech metadata from database
+    with analytics_db.get_connection() as conn:
+        cursor = conn.execute("SELECT year, word, count, is_stopword FROM word_count")
+        word_counts = cursor.fetchall()
+        context.log.info(f"Loaded {len(word_counts)} word-year pairs from database")
+
+        cursor = conn.execute("SELECT year, monarch FROM speech")
+        speeches = cursor.fetchall()
+        context.log.info(f"Loaded {len(speeches)} speech-monarch pairs from database")
+
+    # Compute monarch comparisons
+    context.log.info("Computing monarch comparisons")
+    monarch_results = compute_monarch_comparisons(
+        word_counts, speeches, alpha=config.alpha, min_count=config.min_count, top_n=config.top_n
+    )
+    context.log.info(f"Generated {len(monarch_results)} monarch comparisons")
+
+    # Compute decade comparisons
+    context.log.info("Computing decade comparisons")
+    decade_results = compute_decade_comparisons(
+        word_counts, alpha=config.alpha, min_count=config.min_count, top_n=config.top_n
+    )
+    context.log.info(f"Generated {len(decade_results)} decade comparisons")
+
+    # Combine all results and format for database
+    all_comparisons = []
+    all_words = []
+    comparison_id = 1
+
+    for comparison, top_words in monarch_results + decade_results:
+        # Add comparison metadata
+        all_comparisons.append((
+            comparison.comparison_type,
+            comparison.focal_value,
+            comparison.background_type,
+            comparison.alpha,
+            comparison.focal_corpus_size,
+            comparison.background_corpus_size,
+        ))
+
+        # Add top words with ranks
+        for rank, result in enumerate(top_words, start=1):
+            all_words.append((
+                comparison_id,
+                rank,
+                result.word,
+                result.wlo_score,
+                result.focal_count,
+                result.background_count,
+                result.focal_rate,
+                result.background_rate,
+                result.z_score,
+            ))
+
+        comparison_id += 1
+
+    # Store in database
+    context.log.info(
+        f"Storing {len(all_comparisons)} comparisons with {len(all_words)} top words"
+    )
+    analytics_db.replace_wlo_comparisons(all_comparisons, all_words)
+    context.log.info(f"Stored WLO comparisons to {analytics_db.db_path}")
+
+    # Log sample results
+    if monarch_results:
+        comparison, top_words = monarch_results[0]
+        context.log.info(
+            f"Sample: {comparison.focal_value} vs {comparison.background_type}"
+        )
+        if top_words:
+            context.log.info(f"  Top word: '{top_words[0].word}' (score: {top_words[0].wlo_score:.3f})")
+
+
+@dg.asset_check(asset=wlo_comparisons)
+def wlo_comparisons_stored_correctly(
+    _: dg.AssetCheckExecutionContext, analytics_db: AnalyticsDB
+) -> dg.AssetCheckResult:
+    """Check that WLO comparison data was stored correctly in the database."""
+    with analytics_db.get_connection() as conn:
+        cursor = conn.execute("SELECT COUNT(*) FROM wlo_comparisons")
+        comparison_count = cursor.fetchone()[0]
+
+        cursor = conn.execute("SELECT COUNT(*) FROM wlo_words")
+        word_count = cursor.fetchone()[0]
+
+        cursor = conn.execute(
+            "SELECT COUNT(DISTINCT comparison_type) FROM wlo_comparisons"
+        )
+        comparison_types = cursor.fetchone()[0]
+
+        cursor = conn.execute(
+            """SELECT c.comparison_id, c.focal_value, COUNT(w.word) as word_count
+               FROM wlo_comparisons c
+               LEFT JOIN wlo_words w ON c.comparison_id = w.comparison_id
+               GROUP BY c.comparison_id
+               HAVING word_count = 0"""
+        )
+        empty_comparisons = cursor.fetchall()
+
+    has_comparisons = comparison_count > 0
+    has_words = word_count > 0
+    has_both_types = comparison_types == 2  # monarch and decade
+    no_empty = len(empty_comparisons) == 0
+
+    passed = has_comparisons and has_words and has_both_types and no_empty
+
+    issues = []
+    if not has_comparisons:
+        issues.append("No comparisons found")
+    if not has_words:
+        issues.append("No words found")
+    if not has_both_types:
+        issues.append(f"Expected 2 comparison types, found {comparison_types}")
+    if not no_empty:
+        issues.append(
+            f"{len(empty_comparisons)} comparisons have no words: "
+            f"{[f'{c[1]} (id={c[0]})' for c in empty_comparisons[:3]]}"
+        )
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=f"Stored {comparison_count} comparisons with {word_count} words"
+        if passed
+        else "; ".join(issues),
+        metadata={
+            "comparison_count": comparison_count,
+            "word_count": word_count,
+            "comparison_types": comparison_types,
+            "empty_comparisons": len(empty_comparisons),
+        },
+    )
+
+
+@dg.asset_check(asset=wlo_comparisons)
+def wlo_scores_valid(
+    _: dg.AssetCheckExecutionContext, analytics_db: AnalyticsDB
+) -> dg.AssetCheckResult:
+    """Check that WLO scores are reasonable and not all zeros."""
+    with analytics_db.get_connection() as conn:
+        cursor = conn.execute("SELECT COUNT(*) FROM wlo_words WHERE wlo_score = 0")
+        zero_scores = cursor.fetchone()[0]
+
+        cursor = conn.execute("SELECT COUNT(*) FROM wlo_words")
+        total_words = cursor.fetchone()[0]
+
+        cursor = conn.execute(
+            "SELECT AVG(ABS(wlo_score)), MIN(wlo_score), MAX(wlo_score) FROM wlo_words"
+        )
+        avg_abs, min_score, max_score = cursor.fetchone()
+
+    if total_words == 0:
+        return dg.AssetCheckResult(
+            passed=False,
+            description="No words found in wlo_words table",
+        )
+
+    zero_percent = (zero_scores / total_words * 100) if total_words > 0 else 0
+    has_variation = avg_abs > 0.01  # Average absolute score should be meaningful
+    not_too_many_zeros = zero_percent < 50  # Less than 50% zeros
+
+    passed = has_variation and not_too_many_zeros
+
+    issues = []
+    if not has_variation:
+        issues.append(f"Average absolute score too low: {avg_abs:.4f}")
+    if not not_too_many_zeros:
+        issues.append(f"{zero_percent:.1f}% of scores are zero")
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=f"Scores valid: avg={avg_abs:.3f}, range=[{min_score:.3f}, {max_score:.3f}], {zero_percent:.1f}% zeros"
+        if passed
+        else "; ".join(issues),
+        metadata={
+            "total_words": total_words,
+            "zero_scores": zero_scores,
+            "zero_percent": round(zero_percent, 2),
+            "avg_abs_score": round(avg_abs, 4) if avg_abs else 0,
+            "min_score": round(min_score, 4) if min_score else 0,
+            "max_score": round(max_score, 4) if max_score else 0,
         },
     )

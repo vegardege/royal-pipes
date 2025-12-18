@@ -2,6 +2,29 @@ import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+from dataclasses import dataclass
+
+from royal_pipes.statistics import weighted_log_odds, WeightedLogOddsResult
+
+
+@dataclass
+class WLOComparison:
+    """Metadata for a weighted log-odds comparison.
+
+    Attributes:
+        comparison_type: Type of comparison ('monarch', 'decade')
+        focal_value: The focal group being compared (e.g., 'Margrethe', '2000s')
+        background_type: What the focal is compared against (e.g., 'other_monarchs')
+        alpha: Dirichlet prior strength parameter used
+        focal_corpus_size: Total word count in focal corpus
+        background_corpus_size: Total word count in background corpus
+    """
+    comparison_type: str
+    focal_value: str
+    background_type: str
+    alpha: float
+    focal_corpus_size: int
+    background_corpus_size: int
 
 
 def expand_odds_word(word: str) -> list[str]:
@@ -215,3 +238,126 @@ def compute_speeches(
             speeches.append((year, monarch))
 
     return speeches
+
+
+def compute_monarch_comparisons(
+    word_counts: list[tuple[int, str, int, bool]],
+    speeches: list[tuple[int, str]],
+    alpha: float = 0.01,
+    min_count: int = 5,
+    top_n: int = 20,
+) -> list[tuple[WLOComparison, list[WeightedLogOddsResult]]]:
+    """Compute weighted log-odds comparisons for each monarch vs others.
+
+    Args:
+        word_counts: List of (year, word, count, is_stopword) tuples from database
+        speeches: List of (year, monarch) tuples from database
+        alpha: Dirichlet prior strength parameter
+        min_count: Minimum total count to include a word
+        top_n: Number of top words to return per comparison
+
+    Returns:
+        List of (comparison_metadata, top_words) tuples, one per monarch
+    """
+    # Build year -> monarch mapping
+    year_to_monarch = {year: monarch for year, monarch in speeches}
+
+    # Get unique monarchs
+    monarchs = sorted(set(monarch for _, monarch in speeches))
+
+    results = []
+
+    for focal_monarch in monarchs:
+        # Build focal and background word counts
+        focal_counts: dict[str, int] = {}
+        background_counts: dict[str, int] = {}
+
+        for year, word, count, is_stopword in word_counts:
+            monarch = year_to_monarch.get(year)
+            if monarch is None:
+                continue
+
+            if monarch == focal_monarch:
+                focal_counts[word] = focal_counts.get(word, 0) + count
+            else:
+                background_counts[word] = background_counts.get(word, 0) + count
+
+        # Compute weighted log-odds
+        wlo_results = weighted_log_odds(
+            focal_counts, background_counts, alpha=alpha, min_count=min_count
+        )
+
+        # Sort by score and take top N
+        top_words = sorted(wlo_results, key=lambda r: r.wlo_score, reverse=True)[:top_n]
+
+        # Create comparison metadata
+        comparison = WLOComparison(
+            comparison_type="monarch",
+            focal_value=focal_monarch,
+            background_type="other_monarchs",
+            alpha=alpha,
+            focal_corpus_size=sum(focal_counts.values()),
+            background_corpus_size=sum(background_counts.values()),
+        )
+
+        results.append((comparison, top_words))
+
+    return results
+
+
+def compute_decade_comparisons(
+    word_counts: list[tuple[int, str, int, bool]],
+    alpha: float = 0.01,
+    min_count: int = 5,
+    top_n: int = 20,
+) -> list[tuple[WLOComparison, list[WeightedLogOddsResult]]]:
+    """Compute weighted log-odds comparisons for each decade vs others.
+
+    Args:
+        word_counts: List of (year, word, count, is_stopword) tuples from database
+        alpha: Dirichlet prior strength parameter
+        min_count: Minimum total count to include a word
+        top_n: Number of top words to return per comparison
+
+    Returns:
+        List of (comparison_metadata, top_words) tuples, one per decade
+    """
+    # Get all decades present in data
+    decades = sorted(set((year // 10) * 10 for year, _, _, _ in word_counts))
+
+    results = []
+
+    for focal_decade in decades:
+        # Build focal and background word counts
+        focal_counts: dict[str, int] = {}
+        background_counts: dict[str, int] = {}
+
+        for year, word, count, is_stopword in word_counts:
+            decade = (year // 10) * 10
+
+            if decade == focal_decade:
+                focal_counts[word] = focal_counts.get(word, 0) + count
+            else:
+                background_counts[word] = background_counts.get(word, 0) + count
+
+        # Compute weighted log-odds
+        wlo_results = weighted_log_odds(
+            focal_counts, background_counts, alpha=alpha, min_count=min_count
+        )
+
+        # Sort by score and take top N
+        top_words = sorted(wlo_results, key=lambda r: r.wlo_score, reverse=True)[:top_n]
+
+        # Create comparison metadata
+        comparison = WLOComparison(
+            comparison_type="decade",
+            focal_value=f"{focal_decade}s",
+            background_type="other_decades",
+            alpha=alpha,
+            focal_corpus_size=sum(focal_counts.values()),
+            background_corpus_size=sum(background_counts.values()),
+        )
+
+        results.append((comparison, top_words))
+
+    return results

@@ -42,6 +42,34 @@ CORPUS_TABLE = """
     )
 """
 
+WLO_COMPARISONS_TABLE = """
+    CREATE TABLE IF NOT EXISTS wlo_comparisons (
+        comparison_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        comparison_type TEXT NOT NULL,
+        focal_value TEXT NOT NULL,
+        background_type TEXT NOT NULL,
+        alpha REAL NOT NULL,
+        focal_corpus_size INTEGER NOT NULL,
+        background_corpus_size INTEGER NOT NULL
+    )
+"""
+
+WLO_WORDS_TABLE = """
+    CREATE TABLE IF NOT EXISTS wlo_words (
+        comparison_id INTEGER NOT NULL,
+        rank INTEGER NOT NULL,
+        word TEXT NOT NULL,
+        wlo_score REAL NOT NULL,
+        focal_count INTEGER NOT NULL,
+        background_count INTEGER NOT NULL,
+        focal_rate REAL NOT NULL,
+        background_rate REAL NOT NULL,
+        z_score REAL NOT NULL,
+        PRIMARY KEY (comparison_id, rank),
+        FOREIGN KEY (comparison_id) REFERENCES wlo_comparisons(comparison_id)
+    )
+"""
+
 
 def get_connection(db_path: str | Path) -> sqlite3.Connection:
     """Get a connection to the database.
@@ -213,4 +241,61 @@ def replace_corpus(db_path: str | Path, corpus: list[tuple[str, int, float]]) ->
             "INSERT INTO corpus (word, count, frequency) VALUES (?, ?, ?)",
             corpus,
         )
+        conn.commit()
+
+
+def ensure_wlo_tables(db_path: str | Path) -> None:
+    """Ensure the WLO comparison tables exist with the correct schema.
+
+    Args:
+        db_path: Path to the SQLite database file
+    """
+    with get_connection(db_path) as conn:
+        conn.execute(WLO_COMPARISONS_TABLE)
+        conn.execute(WLO_WORDS_TABLE)
+        conn.commit()
+
+
+def replace_wlo_comparisons(
+    db_path: str | Path,
+    comparisons: list[tuple[str, str, str, float, int, int]],
+    words: list[tuple[int, int, str, float, int, int, float, float, float]],
+) -> None:
+    """Replace all WLO comparison data in the database.
+
+    Args:
+        db_path: Path to the SQLite database file
+        comparisons: List of (comparison_type, focal_value, background_type,
+                     alpha, focal_corpus_size, background_corpus_size) tuples
+        words: List of (comparison_id, rank, word, wlo_score, focal_count,
+               background_count, focal_rate, background_rate, z_score) tuples
+
+    This atomically replaces the entire table contents. The comparison_id values
+    in the words list should match the row number (1-indexed) in the comparisons list.
+    """
+    ensure_wlo_tables(db_path)
+
+    with get_connection(db_path) as conn:
+        # Clear existing data
+        conn.execute("DELETE FROM wlo_words")
+        conn.execute("DELETE FROM wlo_comparisons")
+
+        # Insert comparisons
+        conn.executemany(
+            """INSERT INTO wlo_comparisons
+               (comparison_type, focal_value, background_type, alpha,
+                focal_corpus_size, background_corpus_size)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            comparisons,
+        )
+
+        # Insert words
+        conn.executemany(
+            """INSERT INTO wlo_words
+               (comparison_id, rank, word, wlo_score, focal_count,
+                background_count, focal_rate, background_rate, z_score)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            words,
+        )
+
         conn.commit()
