@@ -1,12 +1,15 @@
 import io
 import logging
+import os
 import re
 import tarfile
 from urllib.parse import urljoin
 
 import aiohttp
 from bs4 import BeautifulSoup
+from openai import AsyncOpenAI
 from playwright.async_api import async_playwright
+from pydantic import BaseModel
 
 from royal_pipes.models import CorpusWord, Monarch
 
@@ -19,7 +22,7 @@ HEADERS = {"User-Agent": "RoyalPipesBot/1.0"}
 OFFICIAL_URL = "https://www.kongehuset.dk/monarkiet-i-danmark/nytaarstaler/"
 
 # Danske Spil odds
-BETTING_URL = "https://danskespil.dk/oddset/sports/competition/25652/underholdning/danmark/danmark-kongens-nytarstale/matches?eventsSort=outrights"
+BETTING_URL = "https://danskespil.dk/oddset/sports/competition/25652/underholdning/danmark/danmark-kongens-nytarstale/outrights"
 
 # Wikipedia monarchs list
 MONARCHS_URL = "https://en.wikipedia.org/wiki/List_of_monarchs_of_Denmark"
@@ -181,32 +184,49 @@ async def load_danskespil_odds(
         try:
             await page.goto(url, wait_until="networkidle")
 
-            # Handle cookie banner - try to reject/close it
-            reject_button = page.locator('button:has-text("Afvis")')
-            if await reject_button.count() > 0:
-                await reject_button.click(timeout=2000)
-                logger.info("Rejected cookies")
-            else:
-                raise ValueError("No button found to reject cookies")
-            await page.wait_for_timeout(500)
+            # Dismiss cookie banner (blocks all clicks to "Vis mere" buttons)
+            try:
+                # Try reject first, fall back to accept
+                reject_button = page.locator('button:has-text("Afvis")')
+                accept_button = page.locator('button:has-text("Accepter")')
+
+                if await reject_button.count() > 0:
+                    await reject_button.click(timeout=2000)
+                    logger.info("Rejected cookies")
+                elif await accept_button.count() > 0:
+                    await accept_button.click(timeout=2000)
+                    logger.info("Accepted cookies")
+                else:
+                    logger.warning("No cookie banner found")
+
+                await page.wait_for_timeout(500)
+            except Exception as e:
+                logger.warning(f"Failed to dismiss cookie banner: {e}")
 
             # Click all "Vis mere" (Show more) buttons to load all betting options
             max_clicks = 20
             for i in range(max_clicks):
+                vis_mere = page.locator('button:has-text("Vis mere")')
+                count = await vis_mere.count()
+                if count == 0:
+                    logger.info(f"All items loaded after {i} clicks")
+                    break
+
+                logger.debug(
+                    f"Found {count} 'Vis mere' buttons, clicking first one (iteration {i + 1})"
+                )
                 try:
-                    vis_mere = page.locator('button:has-text("Vis mere")')
-                    count = await vis_mere.count()
-                    if count == 0:
-                        logger.info(f"All items loaded after {i} clicks")
-                        break
                     await vis_mere.first.click()
-                    await page.wait_for_timeout(500)
-                except Exception:
+                    # Wait for network to settle after loading more content
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception as e:
+                    logger.warning(f"Failed to click 'Vis mere' button: {e}")
                     break
 
             # Get the specific market section
             market_sections = page.locator('[class*="eventMarketWrapper"]')
             section_count = await market_sections.count()
+            logger.debug(f"Found {section_count} market sections on page")
 
             if section_index >= section_count:
                 raise ValueError(
@@ -215,11 +235,19 @@ async def load_danskespil_odds(
 
             target_section = market_sections.nth(section_index)
 
+            # Wait for betting options to be present in the DOM
+            try:
+                await target_section.locator(
+                    '[data-testid="outcome-button"]'
+                ).first.wait_for(state="visible", timeout=10000)
+            except Exception as e:
+                logger.warning(f"Timeout waiting for betting options to appear: {e}")
+
             # Extract all betting options from the target section using data-testid
             outcomes = target_section.locator('[data-testid="outcome-button"]')
             total_count = await outcomes.count()
             logger.info(
-                f"Found {total_count} betting options in section {section_index}/{section_count}"
+                f"Found {total_count} betting options in section {section_index} of {section_count}"
             )
 
             betting_odds = {}
@@ -421,3 +449,224 @@ async def load_leipzig_corpus(url: str = LEIPZIG_URL) -> list[CorpusWord]:
 
     logger.info(f"Parsed {len(corpus)} unique words from Leipzig corpus")
     return corpus
+
+
+# Pydantic models for OpenAI structured output
+class PersonMention(BaseModel):
+    """A person mentioned in a speech."""
+
+    name: str
+    count: int
+
+
+class PlaceMention(BaseModel):
+    """A place mentioned in a speech."""
+
+    name: str
+    count: int
+
+
+class EventMention(BaseModel):
+    """A historical event mentioned in a speech."""
+
+    name: str
+    is_significant: bool
+
+
+class NerResponse(BaseModel):
+    """Complete NER response from LLM."""
+
+    persons: list[PersonMention]
+    places: list[PlaceMention]
+    events: list[EventMention]
+
+
+async def extract_speech_entities(
+    speech_text: str,
+    year: int,
+    api_key: str | None = None,
+) -> dict:
+    """Extract named entities from a speech using GPT-5.2.
+
+    Args:
+        speech_text: The full speech text
+        year: The year of the speech (for historical context)
+        api_key: OpenAI API key (defaults to OPENAI_API_KEY env var)
+
+    Returns:
+        Dict with 'persons', 'places', 'events' lists matching the schema:
+        {
+            "persons": [{"name": "Dronning Ingrid", "count": 3}, ...],
+            "places": [{"name": "Danmark", "count": 15}, ...],
+            "events": [
+                {"name": "World War II", "significance_rank": 1},
+                {"name": "Royal Wedding", "significance_rank": 2},
+                {"name": "Moon Landing", "significance_rank": 3},
+                {"name": "Olympic Games", "significance_rank": null},
+                ...
+            ]
+        }
+
+    Raises:
+        ValueError: If API key is missing or response validation fails
+        openai.OpenAIError: If API call fails
+    """
+    logger.info(f"Extracting entities from {year} speech using GPT-5.2")
+
+    if api_key is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        raise ValueError(
+            "OpenAI API key not provided and OPENAI_API_KEY environment variable not set"
+        )
+
+    client = AsyncOpenAI(api_key=api_key)
+
+    prompt = f"""You are analyzing a Danish monarch's New Year speech from {year}.
+
+INSTRUCTIONS:
+
+1. PERSONS - Extract specific people mentioned:
+   - ONLY include when a specific individual is referenced
+   - Include Danish royal titles + names (e.g., "Dronning Ingrid", "Prins Henrik")
+   - Normalize specific references to individuals:
+     - "dronningen" in {year} → normalize to full name with title
+     - "min kone" → normalize to full name with title
+   - Use the SHORTEST clear name (drop regnal numbers unless needed for disambiguation)
+     - "Dronning Margrethe" NOT "Dronning Margrethe II"
+     - "Kronprins Frederik" for the current crown prince (NOT "Frederik X")
+     - "Frederik IX" when referring to Margrethe's father (even in historical context as crown prince)
+   - Count ALL mentions of that person (including pronouns you normalize)
+   - DO NOT count the speaker: "jeg", "vi", "os", "mig", etc.
+   - DO NOT count collective references: "den kongelige familie", "danskerne", "vi alle", etc.
+   - Only count when referring to a SPECIFIC named individual
+
+   Examples:
+   - "Dronningen og jeg" → "Dronning Margrethe" (count +1, "jeg" excluded)
+   - "Prins Joachim" → "Prins Joachim" (count +1)
+   - "min far Kronprins Frederik" (in 2020) → "Frederik IX" (disambiguate from current crown prince)
+   - "Kronprins Frederik og Kronprinsesse Mary" → "Kronprins Frederik" (count +1)
+   - "Vi danskere" → NO PERSONS (collective reference)
+   - "Den kongelige familie" → NO PERSONS (collective, not specific individuals)
+
+2. PLACES - Extract geographic locations:
+   - Only when used as a place, not in phrases
+   - Normalize genitive: "Danmarks" → "Danmark"
+   - Include: cities, countries, regions, buildings
+   - Exclude: Treaties, laws, abstract concepts
+
+   Examples:
+   - "i Danmark" → "Danmark" (count +1)
+   - "Paristraktaten" → DO NOT INCLUDE (not a place)
+   - "på Amalienborg" → "Amalienborg" (count +1)
+
+3. EVENTS - Extract contemporary events that average Danes would remember:
+
+   WHAT TO INCLUDE:
+   - Events from {year} or explicitly mentioned recent/ongoing events
+   - Major sports victories (Olympics, European Championships, Tour de France wins)
+   - Royal events: births, deaths, weddings (ALWAYS significant)
+   - Wars, conflicts, political upheavals (if ongoing or explicitly mentioned)
+   - Major disasters, assassinations, moon landings, terrorist attacks
+   - Elections, referendums, major political decisions (same year)
+   - Royal jubilees/illness: ONLY if nothing else more significant to include
+
+   WHAT TO EXCLUDE:
+   - Historical anniversaries (e.g., "50 years since WW2" is not significant)
+   - Exception: Major commemorations with significant historical interest beyond a remembrance day
+   - Events from previous years not explicitly discussed as recent/ongoing
+   - New Year's Eve itself
+   - Minor royal illness (unless very serious)
+
+   NAMING RULES:
+   - Use SHORTEST name Danes will understand - aim for 2-4 words max
+   - Examples of shortening:
+     - "Forhandlingerne om Danmarks optagelse i Det Europæiske Fællesskab" → "EØF-ansøgningen"
+     - "Terrorangrebet i Krudttønden og ved Synagogen i København" → "Terrorangrebene i København"
+     - "Forlovelsen mellem Prinsesse Margrethe og Henri de Monpezat" → "Prinsesse Margrethes forlovelse"
+     - "Terrorbombningen mod den danske ambassade i Islamabad" → "Ambassadebomben i Islamabad"
+   - Normalize possessive references: "min Faders Død" → "Christian X's død"
+   - ONLY include year if needed for clarity (Olympics, Tour de France) - otherwise omit
+   - Do NOT include seasons/months in contemporary events: "sygdom i sommeren 1994" → "sygdom"
+   - Use Danish names/Wikipedia article titles
+
+   SIGNIFICANCE MARKING:
+   - Mark UP TO 3 most memorable events with is_significant=true
+   - Prioritize: royal deaths/births/weddings, then major national/international events average Danes remember
+   - Think: Would an average Dane remember this from {year}?
+
+   Examples for {year}=1992:
+   - "Jugoslaviens opløsning" → {{"name": "Jugoslaviens opløsning", "is_significant": true}}
+   - "EM i fodbold" → {{"name": "EM 1992", "is_significant": true}}
+   - "min Faders Død" (if in 1947) → {{"name": "Christian X's død", "is_significant": true}}
+   - "Redningen af de danske jøder i 1943" → DO NOT INCLUDE (historical anniversary, not contemporary)
+   - "Dronningens sygdom i sommeren" → {{"name": "Dronning Margrethes sygdom", "is_significant": false}} (only if no better events)
+
+CRITICAL RULES:
+- Only include entities ACTUALLY mentioned in the speech
+- Counts must be accurate (count all mentions including normalized pronouns)
+- Normalize to SHORTEST clear name (2-4 words for events, drop unnecessary titles/numbers)
+- Empty lists are acceptable if no relevant entities are found in the speech
+- Mark AT MOST 3 events as significant (is_significant=true)
+- NO seasons/months in event names unless critical to understanding
+- NO regnal numbers (II, IX, X) unless needed for disambiguation
+
+SPEECH TEXT:
+{speech_text}"""
+
+    try:
+        response = await client.beta.chat.completions.parse(
+            model="gpt-5.2",
+            messages=[{"role": "user", "content": prompt}],
+            response_format=NerResponse,
+            temperature=0,
+        )
+
+        result = response.choices[0].message.parsed
+
+        # Log token usage
+        if response.usage:
+            logger.info(
+                f"Token usage for {year}: "
+                f"{response.usage.prompt_tokens} prompt + "
+                f"{response.usage.completion_tokens} completion = "
+                f"{response.usage.total_tokens} total"
+            )
+
+        # Validate that at most 3 events are marked significant
+        # If LLM marked more than 3, auto-truncate to first 3 (they're usually in order of importance)
+        significant_events = [e for e in result.events if e.is_significant]
+        if len(significant_events) > 3:
+            logger.warning(
+                f"LLM marked {len(significant_events)} significant events (max 3). "
+                f"Auto-truncating to first 3. All marked: {[e.name for e in significant_events]}"
+            )
+            # Keep first 3 as significant, mark rest as not significant
+            sig_count = 0
+            for event in result.events:
+                if event.is_significant:
+                    if sig_count < 3:
+                        sig_count += 1
+                    else:
+                        event.is_significant = False
+            significant_events = [e for e in result.events if e.is_significant]
+
+        # Convert to dict format
+        result_dict = {
+            "persons": [{"name": p.name, "count": p.count} for p in result.persons],
+            "places": [{"name": p.name, "count": p.count} for p in result.places],
+            "events": [{"name": e.name, "is_significant": e.is_significant} for e in result.events],
+        }
+
+        logger.info(
+            f"Extracted {len(result.persons)} persons, "
+            f"{len(result.places)} places, "
+            f"{len(result.events)} events ({len(significant_events)} significant)"
+        )
+
+        return result_dict
+
+    except Exception as e:
+        logger.error(f"Failed to extract entities for {year}: {e}")
+        raise

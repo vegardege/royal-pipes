@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-from royal_pipes.models import ComparisonResult, CorpusWordWithFrequency, OddsCount, Speech, WordCount
+from royal_pipes.models import ComparisonResult, CorpusWordWithFrequency, OddsCount, SpeechNer, Speech, WordCount
 
 SPEECH_TABLE = """
     CREATE TABLE IF NOT EXISTS speech (
@@ -69,6 +69,33 @@ WLO_WORDS_TABLE = """
         z_score REAL NOT NULL,
         PRIMARY KEY (comparison_id, rank),
         FOREIGN KEY (comparison_id) REFERENCES wlo_comparisons(comparison_id)
+    )
+"""
+
+PERSON_COUNT_TABLE = """
+    CREATE TABLE IF NOT EXISTS person_count (
+        year INTEGER NOT NULL,
+        person TEXT NOT NULL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (year, person)
+    )
+"""
+
+PLACE_COUNT_TABLE = """
+    CREATE TABLE IF NOT EXISTS place_count (
+        year INTEGER NOT NULL,
+        place TEXT NOT NULL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (year, place)
+    )
+"""
+
+SPEECH_EVENT_TABLE = """
+    CREATE TABLE IF NOT EXISTS speech_event (
+        year INTEGER NOT NULL,
+        event TEXT NOT NULL,
+        is_significant BOOLEAN NOT NULL DEFAULT 0,
+        PRIMARY KEY (year, event)
     )
 """
 
@@ -328,5 +355,66 @@ def replace_wlo_comparisons(
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             words,
         )
+
+        conn.commit()
+
+
+def ensure_ner_tables(db_path: str | Path) -> None:
+    """Ensure all NER tables exist with the correct schema.
+
+    Args:
+        db_path: Path to the SQLite database file
+    """
+    with get_connection(db_path) as conn:
+        conn.execute(PERSON_COUNT_TABLE)
+        conn.execute(PLACE_COUNT_TABLE)
+        conn.execute(SPEECH_EVENT_TABLE)
+        conn.commit()
+
+
+def replace_ner_data(
+    db_path: str | Path,
+    ner_results: list[SpeechNer],
+) -> None:
+    """Replace all NER data in the database.
+
+    Args:
+        db_path: Path to the SQLite database file
+        ner_results: List of SpeechNer objects
+
+    This atomically replaces all three NER tables (person_count, place_count,
+    speech_event) in a single transaction.
+    """
+    ensure_ner_tables(db_path)
+
+    with get_connection(db_path) as conn:
+        # Clear all NER tables
+        conn.execute("DELETE FROM person_count")
+        conn.execute("DELETE FROM place_count")
+        conn.execute("DELETE FROM speech_event")
+
+        # Insert person counts
+        for ner in ner_results:
+            for person in ner.persons:
+                conn.execute(
+                    "INSERT INTO person_count (year, person, count) VALUES (?, ?, ?)",
+                    (ner.year, person.name, person.count),
+                )
+
+        # Insert place counts
+        for ner in ner_results:
+            for place in ner.places:
+                conn.execute(
+                    "INSERT INTO place_count (year, place, count) VALUES (?, ?, ?)",
+                    (ner.year, place.name, place.count),
+                )
+
+        # Insert events
+        for ner in ner_results:
+            for event in ner.events:
+                conn.execute(
+                    "INSERT INTO speech_event (year, event, is_significant) VALUES (?, ?, ?)",
+                    (ner.year, event.name, event.is_significant),
+                )
 
         conn.commit()

@@ -1,13 +1,15 @@
+import os
 from collections import Counter
 from datetime import timedelta
 
 import dagster as dg
 from pydantic import Field
 
-from royal_pipes.config import SPEECHES_DIR
+from royal_pipes.config import NER_DIR, SPEECHES_DIR
 from royal_pipes.defs.resources import AnalyticsDB
 from royal_pipes.extract import (
     BETTING_URL,
+    extract_speech_entities,
     load_danskespil_odds,
     load_leipzig_corpus,
     load_monarchs,
@@ -19,12 +21,14 @@ from royal_pipes.transform import (
     compute_decade_comparisons,
     compute_monarch_comparisons,
     compute_odds_counts,
+    compute_speech_ner,
     compute_speeches,
     compute_word_counts,
 )
 
 # Partition Definitions
-year_partitions = dg.DynamicPartitionsDefinition(name="years")
+official_year_partitions = dg.DynamicPartitionsDefinition(name="official_years")
+all_year_partitions = dg.DynamicPartitionsDefinition(name="all_years")
 
 
 # ==============================================================================
@@ -45,13 +49,13 @@ async def kongehuset_speeches(context: dg.AssetExecutionContext) -> dict[int, st
 
     context.log.info(f"Found {len(speeches)} speeches")
 
-    current_partitions = set(context.instance.get_dynamic_partitions("years"))
+    current_partitions = set(context.instance.get_dynamic_partitions("official_years"))
     new_partitions = [
         str(year) for year in speeches if str(year) not in current_partitions
     ]
 
     if new_partitions:
-        context.instance.add_dynamic_partitions("years", new_partitions)
+        context.instance.add_dynamic_partitions("official_years", new_partitions)
         context.log.info(f"Found {len(new_partitions)} new years")
 
     return speeches
@@ -76,7 +80,7 @@ def speeches_found_count(
 
 
 @dg.asset(
-    partitions_def=year_partitions,
+    partitions_def=official_year_partitions,
     io_manager_key="speech_text_io",
 )
 async def kongehuset_speech(
@@ -89,13 +93,24 @@ async def kongehuset_speech(
     to the speeches directory and they will be used instead of re-scraping.
     """
     year = int(context.partition_key)
+
+    # Check if file already exists (manually added)
+    speech_file = SPEECHES_DIR / f"{year}.txt"
+    if speech_file.exists():
+        context.log.info(f"Using existing file for {year} (manually added or previously scraped)")
+        return speech_file.read_text(encoding="utf-8")
+
+    # Otherwise, scrape from official source
     if url := kongehuset_speeches.get(year):
         context.log.info(f"Scraping speech for {year} from {url}")
         content = await load_official_speech(url)
         context.log.info(f"Scraped {len(content)} characters for {year}")
         return content
     else:
-        raise ValueError(f"No URL found for {year}")
+        raise ValueError(
+            f"No URL found for {year} and no manual file exists. "
+            f"Add {speech_file} manually or ensure {year} is on the official website."
+        )
 
 
 @dg.asset_check(asset=kongehuset_speech)
@@ -168,7 +183,7 @@ def speeches_no_duplicates(_: dg.AssetCheckExecutionContext) -> dg.AssetCheckRes
 
 
 @dg.asset(
-    deps=[dg.AssetDep("kongehuset_speech")],
+    deps=[dg.AssetDep("speech")],
     auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
 )
 def word_count(context: dg.AssetExecutionContext, analytics_db: AnalyticsDB) -> None:
@@ -312,7 +327,7 @@ def odds_stored_correctly(
 
 
 @dg.asset(
-    deps=[dg.AssetDep("kongehuset_speech"), dg.AssetDep("odds")],
+    deps=[dg.AssetDep("speech"), dg.AssetDep("odds")],
     auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
 )
 def odds_count(
@@ -464,14 +479,25 @@ def speech(
 ) -> None:
     """Compute speech metadata and store in SQLite.
 
-    Combines speech years with monarch data to create a speech metadata table.
+    Reads all speech files from disk (both official speeches scraped by
+    kongehuset_speech and manually added speeches) and combines them with
+    monarch data to create a speech metadata table.
 
     Table: speech (year, monarch)
     """
     context.log.info("Computing speech metadata from speeches and monarchs")
 
+    # Read all speeches from disk (both official and manually added)
     years = sorted([int(f.stem) for f in SPEECHES_DIR.glob("*.txt")])
-    context.log.info(f"Found {len(years)} speeches")
+    context.log.info(f"Found {len(years)} speeches in directory (official + manually added)")
+
+    # Create partitions for ALL speeches (official + manual) so speech_ner_raw can use them
+    current_partitions = set(context.instance.get_dynamic_partitions("all_years"))
+    new_partitions = [str(year) for year in years if str(year) not in current_partitions]
+
+    if new_partitions:
+        context.instance.add_dynamic_partitions("all_years", new_partitions)
+        context.log.info(f"Added {len(new_partitions)} new partitions for all speeches: {sorted(new_partitions)}")
 
     speeches_data = compute_speeches(years, wikipedia_monarchs)
     context.log.info(f"Matched {len(speeches_data)} speeches with monarch data")
@@ -673,7 +699,7 @@ class WLOConfig(dg.Config):
 
 
 @dg.asset(
-    deps=[dg.AssetDep("word_count"), dg.AssetDep("speech")],
+    deps=[dg.AssetDep("word_count")],
     auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
 )
 def wlo_comparisons(
@@ -866,5 +892,184 @@ def wlo_scores_valid(
             "avg_abs_score": round(avg_abs, 4) if avg_abs else 0,
             "min_score": round(min_score, 4) if min_score else 0,
             "max_score": round(max_score, 4) if max_score else 0,
+        },
+    )
+
+
+# ==============================================================================
+# NER Domain: Named Entity Recognition using GPT-5.2
+# ==============================================================================
+
+
+@dg.asset(
+    partitions_def=all_year_partitions,
+    io_manager_key="speech_ner_json_io",
+    deps=[dg.AssetDep("speech")],
+)
+async def speech_ner_raw(
+    context: dg.AssetExecutionContext,
+) -> dict:
+    """Extract named entities from a speech using GPT-5.2.
+
+    Processes all speeches including manually added ones.
+    Stored as {year}.json in the XDG data directory.
+    Returns raw JSON from LLM with persons, places, and events.
+    """
+    year = int(context.partition_key)
+
+    # Read speech text from file (works for both official and manual speeches)
+    speech_file = SPEECHES_DIR / f"{year}.txt"
+    if not speech_file.exists():
+        raise FileNotFoundError(f"Speech file not found: {speech_file}")
+
+    speech_text = speech_file.read_text(encoding="utf-8")
+    context.log.info(f"Loaded {len(speech_text)} characters from {speech_file.name}")
+
+    context.log.info(f"Extracting entities from {year} speech using GPT-5.2")
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable not set")
+
+    ner_results = await extract_speech_entities(
+        speech_text=speech_text,
+        year=year,
+        api_key=api_key,
+    )
+
+    # Log summary
+    context.log.info(
+        f"Extracted {len(ner_results['persons'])} persons, "
+        f"{len(ner_results['places'])} places, "
+        f"{len(ner_results['events'])} events"
+    )
+
+    return ner_results
+
+
+
+
+@dg.asset_check(asset=speech_ner_raw)
+def ner_has_valid_format(
+    _: dg.AssetCheckExecutionContext,
+) -> dg.AssetCheckResult:
+    """Check that NER files are valid JSON with expected structure."""
+    import json
+
+    invalid_files = []
+    total_files = 0
+
+    for ner_file in sorted(NER_DIR.glob("*.json")):
+        total_files += 1
+        year = ner_file.stem
+        try:
+            data = json.loads(ner_file.read_text(encoding="utf-8"))
+
+            # Just check that the expected keys exist (empty lists are OK)
+            if "persons" not in data or "places" not in data or "events" not in data:
+                invalid_files.append((year, "missing required keys"))
+                continue
+
+            # Verify structure
+            if not isinstance(data["persons"], list):
+                invalid_files.append((year, "persons not a list"))
+            if not isinstance(data["places"], list):
+                invalid_files.append((year, "places not a list"))
+            if not isinstance(data["events"], list):
+                invalid_files.append((year, "events not a list"))
+
+            # Validate significant events count
+            significant_count = sum(1 for e in data["events"] if e.get("is_significant", False))
+            if significant_count > 3:
+                invalid_files.append((year, f"{significant_count} significant events (max 3)"))
+
+        except (json.JSONDecodeError, KeyError) as e:
+            invalid_files.append((year, f"error: {e}"))
+
+    passed = len(invalid_files) == 0
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=f"All {total_files} NER files have valid format"
+        if passed
+        else f"Invalid files: {invalid_files[:5]}",  # Show first 5 failures
+        metadata={"total_files": total_files, "invalid_count": len(invalid_files)},
+    )
+
+
+@dg.asset(
+    deps=[dg.AssetDep("speech_ner_raw")],
+    auto_materialize_policy=dg.AutoMaterializePolicy.eager(),
+)
+def speech_ner(
+    context: dg.AssetExecutionContext,
+    analytics_db: AnalyticsDB,
+) -> None:
+    """Store NER results in SQLite database.
+
+    Reads all NER JSON files and stores in three tables:
+    - person_count: Persons mentioned with counts
+    - place_count: Places mentioned with counts
+    - speech_event: Events with significance ranks (1, 2, 3 for top events, NULL for others)
+    """
+    context.log.info("Computing NER data from JSON files")
+    ner_results = compute_speech_ner(NER_DIR)
+    context.log.info(f"Loaded NER data for {len(ner_results)} speeches")
+
+    analytics_db.replace_ner_data(ner_results)
+    context.log.info(f"Stored NER data to {analytics_db.db_path}")
+
+
+@dg.asset_check(asset=speech_ner)
+def ner_stored_correctly(
+    _: dg.AssetCheckExecutionContext,
+    analytics_db: AnalyticsDB,
+) -> dg.AssetCheckResult:
+    """Check that NER data was stored correctly in all three tables."""
+    with analytics_db.get_connection() as conn:
+        cursor = conn.execute("SELECT COUNT(*) FROM person_count")
+        person_count = cursor.fetchone()[0]
+
+        cursor = conn.execute("SELECT COUNT(*) FROM place_count")
+        place_count = cursor.fetchone()[0]
+
+        cursor = conn.execute("SELECT COUNT(*) FROM speech_event")
+        event_count = cursor.fetchone()[0]
+
+        cursor = conn.execute("SELECT COUNT(DISTINCT year) FROM speech_event")
+        years_with_events = cursor.fetchone()[0]
+
+        # Check that at most 3 events per year are marked significant
+        cursor = conn.execute("""
+            SELECT year, COUNT(*) as sig_count
+            FROM speech_event
+            WHERE is_significant = 1
+            GROUP BY year
+            HAVING sig_count > 3
+        """)
+        years_too_many_significant = cursor.fetchall()
+
+    # Empty data is OK - some speeches may have no entities
+    too_many_significant = len(years_too_many_significant) == 0
+    passed = too_many_significant
+
+    issues = []
+    if not too_many_significant:
+        issues.append(
+            f"{len(years_too_many_significant)} years with >3 significant events: "
+            f"{[f'{y}({c})' for y, c in years_too_many_significant[:5]]}"
+        )
+
+    return dg.AssetCheckResult(
+        passed=passed,
+        description=f"Stored {person_count} persons, {place_count} places, {event_count} events ({years_with_events} years)"
+        if passed
+        else "; ".join(issues),
+        metadata={
+            "person_count": person_count,
+            "place_count": place_count,
+            "event_count": event_count,
+            "years_with_events": years_with_events,
+            "invalid_significant_years": len(years_too_many_significant),
         },
     )

@@ -6,6 +6,7 @@ dependencies = [
     "aiohttp>=3.13.2",
     "beautifulsoup4>=4.14.3",
     "dagster==1.12.4",
+    "openai>=1.0.0",
     "playwright>=1.49.0",
 ]
 
@@ -32,5 +33,3 @@ root_module = "royal_pipes"
 registry_modules = [
     "royal_pipes.components.*",
 ]
-
-

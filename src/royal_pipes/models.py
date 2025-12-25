@@ -142,3 +142,55 @@ class ComparisonResult:
     """
     comparison: WLOComparison
     top_words: list[WeightedLogOddsResult]
+
+
+@dataclass
+class PersonCount:
+    """A person mentioned in a speech with count.
+
+    Attributes:
+        name: The normalized person name (e.g., "Dronning Ingrid")
+        count: Number of mentions in the speech
+    """
+    name: str
+    count: int
+
+
+@dataclass
+class PlaceCount:
+    """A place mentioned in a speech with count.
+
+    Attributes:
+        name: The normalized place name (e.g., "Danmark")
+        count: Number of mentions in the speech
+    """
+    name: str
+    count: int
+
+
+@dataclass
+class EventMention:
+    """A historical event mentioned in a speech.
+
+    Attributes:
+        name: The normalized event name (e.g., "World War II")
+        is_significant: True if this is one of the top 3 most significant events mentioned
+    """
+    name: str
+    is_significant: bool
+
+
+@dataclass
+class SpeechNer:
+    """Complete NER results for a single speech.
+
+    Attributes:
+        year: The speech year
+        persons: List of persons mentioned with counts
+        places: List of places mentioned with counts
+        events: List of events mentioned
+    """
+    year: int
+    persons: list[PersonCount]
+    places: list[PlaceCount]
+    events: list[EventMention]

@@ -6,6 +6,7 @@ from royal_pipes.models import (
     CorpusWordWithFrequency,
     OddsCount,
     Speech,
+    SpeechNer,
     WordCount,
 )
 
@@ -73,3 +74,11 @@ class AnalyticsDB(dg.ConfigurableResource):
     ) -> None:
         """Replace all WLO comparison data in the database."""
         db.replace_wlo_comparisons(self.db_path, comparison_results)
+
+    def ensure_ner_tables(self) -> None:
+        """Ensure all NER tables exist."""
+        db.ensure_ner_tables(self.db_path)
+
+    def replace_ner_data(self, ner_results: list[SpeechNer]) -> None:
+        """Replace all NER data in the database."""
+        db.replace_ner_data(self.db_path, ner_results)

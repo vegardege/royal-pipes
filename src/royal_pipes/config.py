@@ -12,4 +12,7 @@ DATA_ROOT.mkdir(parents=True, exist_ok=True)
 SPEECHES_DIR = DATA_ROOT / "speeches"
 SPEECHES_DIR.mkdir(parents=True, exist_ok=True)
 
+NER_DIR = DATA_ROOT / "ner"
+NER_DIR.mkdir(parents=True, exist_ok=True)
+
 DB_PATH = DATA_ROOT / "analytics.db"

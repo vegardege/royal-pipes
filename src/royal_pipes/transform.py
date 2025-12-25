@@ -1,3 +1,4 @@
+import json
 import re
 from collections import Counter
 from datetime import datetime
@@ -5,9 +6,13 @@ from pathlib import Path
 
 from royal_pipes.models import (
     ComparisonResult,
+    EventMention,
     Monarch,
     OddsCount,
+    PersonCount,
+    PlaceCount,
     Speech,
+    SpeechNer,
     WLOComparison,
     WordCount,
 )
@@ -425,3 +430,52 @@ def compute_decade_comparisons(
         results.append(ComparisonResult(comparison=comparison, top_words=top_words))
 
     return results
+
+
+def compute_speech_ner(ner_json_dir: str | Path) -> list[SpeechNer]:
+    """Load and parse all NER JSON files.
+
+    Args:
+        ner_json_dir: Directory containing YYYY.json NER files
+
+    Returns:
+        List of SpeechNer objects for all years
+
+    Raises:
+        ValueError: If JSON parsing fails or data is malformed
+    """
+    ner_dir_path = Path(ner_json_dir)
+    ner_results: list[SpeechNer] = []
+
+    for ner_file in sorted(ner_dir_path.glob("*.json")):
+        year = int(ner_file.stem)
+
+        try:
+            data = json.loads(ner_file.read_text(encoding="utf-8"))
+
+            # Parse persons
+            persons = [
+                PersonCount(name=p["name"], count=p["count"])
+                for p in data.get("persons", [])
+            ]
+
+            # Parse places
+            places = [
+                PlaceCount(name=p["name"], count=p["count"])
+                for p in data.get("places", [])
+            ]
+
+            # Parse events
+            events = [
+                EventMention(name=e["name"], is_significant=e.get("is_significant", False))
+                for e in data.get("events", [])
+            ]
+
+            ner_results.append(
+                SpeechNer(year=year, persons=persons, places=places, events=events)
+            )
+
+        except (KeyError, ValueError, json.JSONDecodeError) as e:
+            raise ValueError(f"Failed to parse NER file {ner_file}: {e}") from e
+
+    return ner_results

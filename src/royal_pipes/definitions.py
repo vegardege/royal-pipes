@@ -2,8 +2,8 @@ from pathlib import Path
 
 from dagster import Definitions, load_from_defs_folder
 
-from royal_pipes.config import DB_PATH, SPEECHES_DIR
-from royal_pipes.defs.io_managers import SpeechTextIOManager
+from royal_pipes.config import DB_PATH, NER_DIR, SPEECHES_DIR
+from royal_pipes.defs.io_managers import SpeechNerJsonIOManager, SpeechTextIOManager
 from royal_pipes.defs.resources import AnalyticsDB
 
 
@@ -20,6 +20,7 @@ def _load_definitions() -> Definitions:
         resources={
             **(loaded.resources or {}),
             "speech_text_io": SpeechTextIOManager(storage_dir=str(SPEECHES_DIR)),
+            "speech_ner_json_io": SpeechNerJsonIOManager(storage_dir=str(NER_DIR)),
             "analytics_db": AnalyticsDB(db_path=str(DB_PATH)),
         },
     )
