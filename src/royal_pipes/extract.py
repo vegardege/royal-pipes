@@ -8,6 +8,7 @@ from urllib.parse import urljoin
 import aiohttp
 from bs4 import BeautifulSoup
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionUserMessageParam
 from playwright.async_api import async_playwright
 from pydantic import BaseModel
 
@@ -616,14 +617,20 @@ SPEECH TEXT:
 {speech_text}"""
 
     try:
+        messages: list[ChatCompletionUserMessageParam] = [
+            {"role": "user", "content": prompt}
+        ]
         response = await client.beta.chat.completions.parse(
             model="gpt-5.2",
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             response_format=NerResponse,
             temperature=0,
         )
 
         result = response.choices[0].message.parsed
+
+        if result is None:
+            raise ValueError("LLM returned None for parsed response")
 
         # Log token usage
         if response.usage:
