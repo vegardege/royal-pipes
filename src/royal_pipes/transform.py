@@ -125,12 +125,10 @@ def normalize_for_wlo(word: str) -> str:
     """Normalize a word for weighted log-odds comparisons.
 
     Applies additional normalization beyond standard text normalization,
-    specifically for comparative analysis where we want to treat historical
-    spelling variants as the same word.
+    specifically for comparative analysis.
 
     Applies transformations:
-    1. Normalize 'aa' to 'å' (historical Danish spelling: "gaar" → "går")
-    2. Convert to lowercase
+    1. Convert to lowercase
 
     Args:
         word: The word to normalize
@@ -140,7 +138,7 @@ def normalize_for_wlo(word: str) -> str:
 
     Examples:
         >>> normalize_for_wlo("Gaar")
-        "går"
+        "gaar"
         >>> normalize_for_wlo("Danmark")
         "danmark"
 
@@ -148,8 +146,6 @@ def normalize_for_wlo(word: str) -> str:
         This is applied AFTER word extraction, so it doesn't affect proper nouns
         like "Aarhus" that were already extracted as complete tokens.
     """
-    # Normalize 'aa' to 'å' before lowercasing to handle 'Aa' correctly
-    word = word.replace("Aa", "Å").replace("AA", "Å").replace("aa", "å")
     return word.lower()
 
 
